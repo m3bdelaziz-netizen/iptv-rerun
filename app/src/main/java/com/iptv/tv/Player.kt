@@ -58,6 +58,10 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import androidx.tv.material3.Button
+import androidx.tv.material3.Card
+import androidx.tv.material3.CardDefaults
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import android.widget.Toast
 import androidx.tv.material3.ButtonDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
 import kotlinx.coroutines.Dispatchers
@@ -72,6 +76,14 @@ object Hub {
     @Volatile var p: ExoPlayer? = null
     var was = false
 }
+
+/** Set when the player is used as the Live TV home screen (categories | vertical channel list | preview). */
+class LiveHome(
+    val browseCat: String, val playCat: String, val startFull: Boolean,
+    val onTab: (Int) -> Unit, val onSettings: () -> Unit, val onPlaylists: () -> Unit,
+    val onState: (browseCat: String, playCat: String, channelKey: String?) -> Unit,
+    val exitApp: () -> Unit
+)
 
 fun fmtTime(ms: Long): String {
     val s = ms / 1000
@@ -102,18 +114,28 @@ fun cycleTrack(p: ExoPlayer, type: Int, allowOff: Boolean): String {
 }
 
 @Composable
-fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = null) {
+fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = null, home: LiveHome? = null) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    val isLive = args.chans.isNotEmpty()
+    val isLive = home != null || args.chans.isNotEmpty()
 
     // Live channel list & category state (allows switching categories while watching in split mode)
     var activeChans by remember { mutableStateOf(args.chans) }
     var ci by remember { mutableStateOf(args.idx.coerceAtLeast(0)) }
-    var fullScreen by remember { mutableStateOf(true) }
+    var fullScreen by remember { mutableStateOf(home?.startFull ?: true) }
     var selectedCatId by remember {
-        mutableStateOf(args.chans.getOrNull(args.idx)?.cat?.takeIf { it.isNotBlank() } ?: "*")
+        mutableStateOf(home?.browseCat ?: args.chans.getOrNull(args.idx)?.cat?.takeIf { it.isNotBlank() } ?: "*")
     }
+    // The list the playing channel came from (used to remember the last channel and its zapping list).
+    var playCat by remember { mutableStateOf(home?.playCat ?: args.chans.getOrNull(args.idx)?.cat?.takeIf { it.isNotBlank() } ?: "*") }
+    // Manual rearranging of the channel list (long press a channel -> Rearrange).
+    var moveId by remember { mutableStateOf<String?>(null) }
+    var work by remember { mutableStateOf<List<Item>>(emptyList()) }
+    var sortTick by remember { mutableStateOf(0) }
+    var menuCh by remember { mutableStateOf<MenuState?>(null) }
+    val catFR = remember { FocusRequester() }
+    val moveFR = remember { FocusRequester() }
+    var catFocused by remember { mutableStateOf(false) }
 
     var u by remember(ci, activeChans) { mutableStateOf(0) }
     var err by remember(ci, activeChans, u) { mutableStateOf("") }
@@ -144,7 +166,6 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
     val cur: Item? = if (isLive) activeChans.getOrNull(ci) else null
     val media: Media? = if (!isLive) args.vod.getOrNull(ci) else null
     val title = cur?.name ?: media?.title ?: ""
-    val swap = remember { Store.bool("swapUpDown", false) }
     val seekStep = remember { if (Store.int("seek", 0) == 0) 10_000L else 30_000L }
     val subMult = remember { when (Store.int("ssize", 1)) { 0 -> 0.8f; 2 -> 1.3f; 3 -> 1.6f; else -> 1f } }
     val showClock = remember { Store.bool("clock", true) }
@@ -173,6 +194,22 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
                 if (sl.isNotEmpty()) b = b.setPreferredTextLanguage(sl)
                 trackSelectionParameters = b.build()
             }
+    }
+
+    fun finishMove(save: Boolean) {
+        val mv = moveId
+        if (save && mv != null) {
+            LiveOrder.save(selectedCatId, work.map { it.fkey })
+            if (Store.int("sortLive", 0) != 2) { Store.put("sortLive", 2); Toast.makeText(ctx, tr("Live sort set to Manual"), Toast.LENGTH_SHORT).show() }
+            sortTick++
+            if (playCat == selectedCatId) {   // keep Up / Down zapping in the new order
+                val curKey = cur?.fkey
+                val nl = liveChannels(selectedCatId)
+                activeChans = nl
+                ci = nl.indexOfFirst { it.fkey == curKey }.coerceAtLeast(0)
+            }
+        }
+        moveId = null; work = emptyList()
     }
 
     fun poke() { bar = true; stamp++ }
@@ -258,6 +295,14 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
         if (Store.bool("autonext", true) && ci < args.vod.size - 1) ci++ else onExit()
     }
     LaunchedEffect(cur?.id) { banner = true; delay(3500); banner = false }
+    // Remember the last live channel (start option "Last channel") and where the live home was.
+    LaunchedEffect(cur?.fkey, selectedCatId, playCat) {
+        val c = cur
+        if (isLive && c != null) { Store.put("lastCh_${Store.pid()}", c.fkey); Store.put("lastChCat_${Store.pid()}", playCat) }
+        home?.onState?.invoke(selectedCatId, playCat, c?.fkey)
+    }
+    // Keep the channel that is being moved under the D-pad cursor.
+    LaunchedEffect(moveId, work) { if (moveId != null) { delay(30); runCatching { moveFR.requestFocus() } } }
     LaunchedEffect(menu, fullScreen, controls) {
         delay(80)
         runCatching {
@@ -293,7 +338,7 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
     LaunchedEffect(menu, fullScreen, cur?.id) {
         val c = cur ?: return@LaunchedEffect
         if (menu || !fullScreen) {
-            epg = withContext(Dispatchers.IO) { runCatching { Api.epg(c.id) }.getOrDefault(emptyList()) }
+            epg = withContext(Dispatchers.IO) { runCatching { Epg.lines(c.epgId, c.name).ifEmpty { Api.epg(c.id) } }.getOrDefault(emptyList()) }
         }
     }
 
@@ -315,8 +360,8 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
             }
             return when {
                 digit >= 0 -> { if (digits.length < 4) digits += digit.toString(); true }
-                up -> { zap(if (swap) -1 else 1); true }
-                down -> { zap(if (swap) 1 else -1); true }
+                up -> { zap(1); true }
+                down -> { zap(-1); true }
                 k == KeyEvent.KEYCODE_MEDIA_NEXT -> { zap(1); true }
                 k == KeyEvent.KEYCODE_MEDIA_PREVIOUS -> { zap(-1); true }
                 ok || info -> { menu = true; true }
@@ -358,8 +403,12 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
     BackHandler(enabled = menu || isLive || !isLive) {
         when {
             menu -> menu = false
+            moveId != null -> finishMove(false)
             isLive && fullScreen -> fullScreen = false
-            isLive && !fullScreen -> onExit()
+            isLive && !fullScreen -> {
+                if (home == null) onExit()
+                else if (catFocused || runCatching { catFR.requestFocus() }.isFailure) home.exitApp()   // 1st Back: to the categories, 2nd Back: exit
+            }
             !isLive && (!controls && !bar) -> { bar = true; controls = true; stamp++ }
             else -> onExit()
         }
@@ -378,31 +427,38 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
             .then(if (!split) Modifier.focusRequester(rootFR).focusable().onKeyEvent { handleKey(it.nativeKeyEvent) } else Modifier)
     ) {
     if (split) {
-        // ==================== SPLIT-SCREEN LIVE BROWSER (Categories | Channels | Preview + EPG) ====================
-        val categories = remember(Repo.version) {
+        // ==================== LIVE TV: Categories | vertical channel list | Preview + EPG ====================
+        val categories = remember(Repo.version, Store.favs.size) {
             val counts = Repo.live.groupingBy { it.cat }.eachCount()
             buildList {
-                add(Triple("fav", "★ Favorites", (Repo.live + Repo.radio).count { Store.favs.contains(it.fkey) }))
+                add(Triple("fav", "Favorites", (Repo.live + Repo.radio).count { Store.favs.contains(it.fkey) }))
                 add(Triple("*", "All channels", Repo.live.size))
                 Repo.liveCats.forEach { c -> add(Triple(c.id, c.name, counts[c.id] ?: 0)) }
                 if (Repo.radio.isNotEmpty()) add(Triple("radio", "Radio", Repo.radio.size))
             }
         }
-        val displayedChans = remember(selectedCatId, Repo.version, Store.favs.size) {
-            when (selectedCatId) {
-                "fav" -> (Repo.live + Repo.radio).filter { Store.favs.contains(it.fkey) }
-                "radio" -> Repo.radio
-                "*" -> Repo.live
-                else -> Repo.live.filter { it.cat == selectedCatId }
-            }
-        }
+        val displayedChans = remember(selectedCatId, Repo.version, Store.favs.size, sortTick) { liveChannels(selectedCatId) }
+        val shown = if (moveId != null) work else displayedChans
+        val plName = remember(Repo.version) { Store.cur()?.name?.ifBlank { null } ?: "Playlists" }
         val catListState = rememberLazyListState()
         val chanListState = rememberLazyListState()
 
-        val catFR = remember { FocusRequester() }
+        fun playFrom(idx: Int, ch: Item) {
+            if (ch.fkey == cur?.fkey) { if (cur != null) fullScreen = true }
+            else { activeChans = shown; playCat = selectedCatId; ci = idx }
+        }
+        fun chanMenu(ch: Item, idx: Int): MenuState {
+            val a = mutableListOf<MenuAction>()
+            a += MenuAction("▶  Play") { playFrom(idx, ch) }
+            a += favAction(ch)
+            a += MenuAction("⇅  Rearrange") { work = displayedChans; moveId = ch.fkey }
+            if (LiveOrder.saved(selectedCatId).isNotEmpty()) a += MenuAction("Reset order of this list") { LiveOrder.clear(selectedCatId); sortTick++ }
+            return MenuState(ch.name, a)
+        }
+
         LaunchedEffect(selectedCatId) {
-            val activeIdxInDisplayed = displayedChans.indexOfFirst { it.id == cur?.id }
-            if (activeIdxInDisplayed >= 0) chanListState.scrollToItem(activeIdxInDisplayed)
+            val i = displayedChans.indexOfFirst { it.fkey == cur?.fkey }
+            if (i >= 0) chanListState.scrollToItem(i)
         }
         // Make sure the D-pad always has somewhere to land: the playing channel if it is on screen, else the category list.
         LaunchedEffect(Unit) {
@@ -411,92 +467,129 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
         }
 
         Column(Modifier.fillMaxSize().background(Theme.bg)) {
-            // Top Header Bar
+            // Top bar: Movies | Series | Live pills, playing channel, settings, clock
             Row(
                 Modifier.fillMaxWidth().background(Theme.sidebar).padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("Live TV", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Theme.accent)
+                if (home != null) {
+                    TabPill("Movies", false) { home.onTab(0) }
+                    TabPill("Series", false) { home.onTab(1) }
+                    TabPill("Live", true) { }
+                } else Text("Live TV", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Theme.accent)
                 Text("•", fontSize = 14.sp, color = Color.Gray)
                 Text(cur?.name ?: "", Modifier.weight(1f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (home != null) Chip(if (Vpn.up != null) "VPN ●" else "Settings", false, Modifier, 10.dp) { home.onSettings() }
                 if (showClock) Text(clockFmt.format(Date(clock)), fontSize = 14.sp, fontWeight = FontWeight.Bold)
             }
 
-            // 3-Column Layout: Categories | Channel List | Live Preview + EPG + Buttons
             Row(Modifier.weight(1f).fillMaxWidth()) {
-                // 1. Left Column: Categories
-                LazyColumn(
-                    state = catListState,
-                    modifier = Modifier.width(210.dp).fillMaxHeight().background(Theme.sidebar).padding(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    itemsIndexed(categories) { _, (id, label, count) ->
-                        val sel = id == selectedCatId
-                        Button(
-                            onClick = { selectedCatId = id },
-                            modifier = Modifier.fillMaxWidth().then(if (sel) Modifier.focusRequester(catFR) else Modifier),
-                            colors = focusColors(if (sel) Theme.accent.copy(alpha = 0.35f) else Color.Transparent),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 7.dp)
-                        ) {
-                            Text(label, Modifier.weight(1f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("$count", fontSize = 11.sp, color = Color.LightGray)
+                // 1. Categories
+                Column(Modifier.width(210.dp).fillMaxHeight().background(Theme.sidebar).padding(8.dp)) {
+                    LazyColumn(
+                        state = catListState,
+                        modifier = Modifier.weight(1f).fillMaxWidth().onFocusChanged { catFocused = it.hasFocus },
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        itemsIndexed(categories) { _, (id, label, count) ->
+                            val sel = id == selectedCatId
+                            val m = if (sel) Modifier.focusRequester(catFR) else Modifier
+                            if (id == "fav") FavItem(label, count, sel, m) { finishMove(false); selectedCatId = id }
+                            else Button(
+                                onClick = { finishMove(false); selectedCatId = id },
+                                modifier = Modifier.fillMaxWidth().then(m),
+                                colors = focusColors(if (sel) Theme.accent.copy(alpha = 0.35f) else Color.Transparent),
+                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 7.dp)
+                            ) {
+                                Text(label, Modifier.weight(1f), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
                         }
+                    }
+                    if (home != null) {
+                        Spacer(Modifier.height(6.dp))
+                        Chip("☰  $plName", false, Modifier.fillMaxWidth(), 8.dp) { home.onPlaylists() }
                     }
                 }
 
-                // 2. Middle Column: Channels in Selected Category
+                // 2. Channels, one per row
                 LazyColumn(
                     state = chanListState,
-                    modifier = Modifier.weight(1f).fillMaxHeight().padding(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    itemsIndexed(displayedChans) { idx, ch ->
-                        val isPlayingThis = ch.id == cur?.id
-                        val isFav = Store.favs.contains(ch.fkey)
-                        Button(
-                            onClick = {
-                                if (isPlayingThis) {
-                                    // Clicking the already-playing channel returns to full screen
-                                    fullScreen = true
-                                } else {
-                                    // Switch stream immediately while staying in split view
-                                    activeChans = displayedChans
-                                    ci = idx
+                    modifier = Modifier.weight(1f).fillMaxHeight().padding(8.dp)
+                        .onPreviewKeyEvent { e ->
+                            val mv = moveId
+                            if (mv == null) false
+                            else {
+                                val k = e.nativeKeyEvent.keyCode
+                                val isDown = e.nativeKeyEvent.action == KeyEvent.ACTION_DOWN
+                                val i = work.indexOfFirst { it.fkey == mv }
+                                when (k) {
+                                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN -> {
+                                        val to = if (k == KeyEvent.KEYCODE_DPAD_UP) i - 1 else i + 1
+                                        if (isDown && i >= 0 && to in work.indices) {
+                                            val l = work.toMutableList(); java.util.Collections.swap(l, i, to); work = l
+                                            val first = chanListState.firstVisibleItemIndex
+                                            val n = chanListState.layoutInfo.visibleItemsInfo.size
+                                            if (to <= first) scope.launch { chanListState.scrollToItem((to - 1).coerceAtLeast(0)) }
+                                            else if (to >= first + n - 1) scope.launch { chanListState.scrollToItem((to - n + 2).coerceAtLeast(0)) }
+                                        }
+                                        true
+                                    }
+                                    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> true   // stay in the list while moving
+                                    else -> false
                                 }
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                                .then(if (isPlayingThis) Modifier.focusRequester(activeChanFR) else Modifier),
-                            colors = focusColors(if (isPlayingThis) Theme.accent.copy(alpha = 0.28f) else Theme.card),
-                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                            }
+                        },
+                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    if (shown.isEmpty()) item {
+                        Text(if (selectedCatId == "fav") "No favorites yet (hold OK on a channel)" else "Nothing here",
+                            Modifier.padding(16.dp), fontSize = 13.sp, color = Theme.muted)
+                    }
+                    itemsIndexed(shown, key = { _, ch -> ch.fkey }) { idx, ch ->
+                        val playingThis = ch.fkey == cur?.fkey
+                        val isFav = Store.favs.contains(ch.fkey)
+                        val grabbed = moveId == ch.fkey
+                        val fr = when { grabbed -> Modifier.focusRequester(moveFR); playingThis -> Modifier.focusRequester(activeChanFR); else -> Modifier }
+                        Card(
+                            onClick = { if (moveId != null) finishMove(true) else playFrom(idx, ch) },
+                            onLongClick = { if (moveId == null) menuCh = chanMenu(ch, idx) },
+                            modifier = Modifier.fillMaxWidth().then(fr),
+                            colors = CardDefaults.colors(
+                                containerColor = if (grabbed) Theme.accent.copy(alpha = 0.55f) else if (playingThis) Theme.accent.copy(alpha = 0.28f) else Theme.card,
+                                contentColor = Color.White,
+                                focusedContainerColor = Theme.accent, focusedContentColor = Color.White,
+                                pressedContainerColor = Theme.accent, pressedContentColor = Color.White
+                            ),
+                            scale = CardDefaults.scale(focusedScale = 1f)
                         ) {
-                            val num = ChNum.num(ch, idx)
-                            if (num > 0) Text("$num", Modifier.width(34.dp), fontSize = 11.sp, color = Color.LightGray)
-                            if (ch.img.isNotBlank()) {
-                                Img(ch.img, Modifier.size(28.dp), ContentScale.Fit, 80, 80)
-                                Spacer(Modifier.width(8.dp))
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                                val num = ChNum.num(ch, idx)
+                                if (grabbed) Text("⇅", Modifier.width(34.dp), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                else if (num > 0) Text("$num", Modifier.width(34.dp), fontSize = 11.sp, color = Color.LightGray, maxLines = 1)
+                                if (ch.img.isNotBlank()) Img(ch.img, Modifier.size(30.dp), ContentScale.Fit, 80, 80) else Spacer(Modifier.size(30.dp))
+                                Spacer(Modifier.width(10.dp))
+                                Text(ch.name, Modifier.weight(1f), fontSize = 13.sp,
+                                    fontWeight = if (playingThis || grabbed) FontWeight.Bold else FontWeight.Normal,
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                streamQuality(ch.name)?.let { q ->
+                                    Spacer(Modifier.width(6.dp))
+                                    Box(Modifier.background(Color(0x66000000), RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 1.dp)) {
+                                        Text(q, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFC107), maxLines = 1)
+                                    }
+                                }
+                                if (playingThis) Text("  ▶", fontSize = 11.sp)
+                                if (isFav) Text("  ★", fontSize = 13.sp, color = Color(0xFFFFC107))
                             }
-                            Text(
-                                ch.name, Modifier.weight(1f), fontSize = 12.sp,
-                                fontWeight = if (isPlayingThis) FontWeight.Bold else FontWeight.Normal,
-                                maxLines = 1, overflow = TextOverflow.Ellipsis
-                            )
-                            streamQuality(ch.name)?.let { q ->
-                                Spacer(Modifier.width(4.dp))
-                                Text(q, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Theme.accent, maxLines = 1)
-                            }
-                            if (isPlayingThis) Text("▶ ", fontSize = 11.sp, color = Theme.accent)
-                            if (isFav) Text("★", fontSize = 12.sp, color = Color(0xFFFFC107))
                         }
                     }
                 }
 
-                // 3. Right Column: Mini Live Player + EPG + Action Buttons
+                // 3. Preview + guide + buttons
                 Column(
                     modifier = Modifier.width(360.dp).fillMaxHeight().background(Theme.panel).padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // Mini Live Video Box
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -506,38 +599,32 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
                             .border(1.dp, Theme.accent.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
                             .onGloballyPositioned { slot = it.boundsInRoot() }
                     ) {
-                        if (buffering && err.isBlank()) Text("Loading...", Modifier.align(Alignment.Center), fontSize = 11.sp)
+                        if (cur != null && buffering && err.isBlank()) Text("Loading...", Modifier.align(Alignment.Center), fontSize = 11.sp)
                         if (err.isNotBlank()) Text("Error: $err", Modifier.align(Alignment.Center), fontSize = 11.sp)
                     }
 
-                    // Channel Title & EPG Info
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(cur?.name ?: "", fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        if (epg.isEmpty()) {
+                        if (moveId != null) {
+                            Text("Moving: press Up / Down, then OK to drop. Back cancels.", fontSize = 12.sp, color = Theme.accent)
+                        } else if (epg.isEmpty()) {
                             Text("No guide data", fontSize = 11.sp, color = Color.Gray)
                         } else {
-                            epg.take(3).forEach { line ->
-                                Text(line, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
+                            epg.take(3).forEach { line -> Text(line, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                         }
                     }
 
-                    // Bottom Action Buttons (Matching screenshot)
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Chip("Full Screen", true, Modifier.weight(1f), 8.dp) { fullScreen = true }
+                        Chip("Full Screen", true, Modifier.weight(1f), 8.dp) { if (cur != null) fullScreen = true }
                         if (cur != null) {
-                            Chip(
-                                if (Store.favs.contains(cur.fkey)) "★ Fav" else "☆ Fav",
-                                false, Modifier.weight(1f), 8.dp
-                            ) { Store.fav(cur) }
+                            Chip(if (Store.favs.contains(cur.fkey)) "★ Fav" else "☆ Fav", false, Modifier.weight(1f), 8.dp) { Store.fav(cur) }
                         }
-                        if (onSearch != null) {
-                            Chip("Search", false, Modifier.weight(1f), 8.dp) { onSearch() }
-                        }
+                        if (onSearch != null) Chip("Search", false, Modifier.weight(1f), 8.dp) { onSearch() }
                     }
                 }
             }
         }
+        menuCh?.let { mm -> OptionsDialog(mm.title, mm.actions) { menuCh = null } }
     }
 
     // Single persistent PlayerView instance so switching between full screen and preview never recreates the surface

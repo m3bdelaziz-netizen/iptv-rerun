@@ -47,6 +47,7 @@ object History {
         version++
     }
 
+    fun reload() { pid = ""; version++ }
     fun all(): List<Hist> { ensure(); return list.sortedByDescending { it.ts } }
     fun get(key: String): Hist? { ensure(); return list.firstOrNull { it.key == key } }
 

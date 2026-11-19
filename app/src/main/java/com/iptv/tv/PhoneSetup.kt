@@ -129,21 +129,13 @@ object PhoneSetup {
         var bad = false
         val tmdb = f["tmdb"]?.trim().orEmpty()
         val omdb = f["omdb"]?.trim().orEmpty()
-        val addonUrl = f["addon_url"]?.trim().orEmpty()
-        val addonJson = f["addon_json"]?.trim().orEmpty()
+        val epgTxt = f["epg"].orEmpty()
         val server = f["server"]?.trim().orEmpty()
         val user = f["user"]?.trim().orEmpty()
         val pass = f["pass"].orEmpty()
         if (tmdb.isNotEmpty()) { Store.put("tmdb", tmdb); Api.c = Api.c.copy(tmdb = tmdb); msgs += "TMDB key saved" }
+        if (epgTxt.isNotBlank()) { val n = Epg.add(epgTxt); if (n > 0) msgs += "$n EPG link(s) added" else { bad = true; msgs += "No valid EPG link" } }
         if (omdb.isNotEmpty()) { Store.put("omdb", omdb); msgs += "OMDb key saved" }
-        if (addonUrl.isNotEmpty()) {
-            val err = runCatching { Addons.addUrl(addonUrl) }.getOrElse { it.message ?: "Failed to add addon" }
-            if (err == null) msgs += "Addon added" else { bad = true; msgs += "Addon error: $err" }
-        }
-        if (addonJson.isNotEmpty()) {
-            val err = Addons.addJson(addonJson, "Phone Addon")
-            if (err == null) msgs += "Local addon added" else { bad = true; msgs += "Addon JSON error: $err" }
-        }
         if (server.isNotEmpty() || user.isNotEmpty() || pass.isNotEmpty()) {
             if (server.isEmpty() || user.isEmpty() || pass.isEmpty()) {
                 bad = true; msgs += "Fill server, username and password together"
@@ -177,7 +169,7 @@ object PhoneSetup {
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>IPTV TV setup</title>
 <style>body{font-family:system-ui,sans-serif;background:#0b0e1a;color:#fff;margin:0;padding:20px;max-width:480px}
 h2{margin-top:0}label{display:block;margin:14px 0 4px;font-size:14px;color:#b8c0e0}
-input{width:100%;box-sizing:border-box;padding:12px;font-size:16px;border-radius:8px;border:1px solid #3b4366;background:#1a1f30;color:#fff}
+input,textarea{width:100%;box-sizing:border-box;padding:12px;font-size:16px;border-radius:8px;border:1px solid #3b4366;background:#1a1f30;color:#fff}
 button{margin-top:22px;width:100%;padding:14px;font-size:17px;border:0;border-radius:8px;background:#e50914;color:#fff}
 a{color:#8ab4ff}hr{border:0;border-top:1px solid #2a3050;margin:22px 0 4px}</style></head>
 <body><h2>$title</h2>$body</body></html>"""
@@ -187,8 +179,7 @@ a{color:#8ab4ff}hr{border:0;border-top:1px solid #2a3050;margin:22px 0 4px}</sty
 <label>Server / السيرفر</label><input name="server" placeholder="http://host:port" inputmode="url" autocapitalize="off" autocorrect="off" autocomplete="off">
 <label>Username / اسم المستخدم</label><input name="user" autocapitalize="off" autocorrect="off" autocomplete="off">
 <label>Password / كلمة المرور</label><input name="pass" autocapitalize="off" autocorrect="off" autocomplete="off">
-<hr><label>Addon URL / رابط إضافة (manifest.json or stremio://)</label><input name="addon_url" placeholder="https://.../manifest.json" inputmode="url" autocapitalize="off" autocorrect="off" autocomplete="off">
-<label>Or Addon JSON / أو نص JSON للإضافة</label><input name="addon_json" placeholder='{"name":"My links","streams":[...]}' autocapitalize="off" autocorrect="off" autocomplete="off">
+<hr><label>EPG URLs (optional, one per line) / روابط الدليل</label><textarea name="epg" rows="3" placeholder="https://.../guide.xml.gz" autocapitalize="off" autocorrect="off" autocomplete="off"></textarea>
 <hr><label>TMDB API key v3 (optional) / مفتاح TMDB</label><input name="tmdb" autocapitalize="off" autocorrect="off" autocomplete="off">
 <label>OMDb API key (optional) / مفتاح OMDb</label><input name="omdb" autocapitalize="off" autocorrect="off" autocomplete="off">
 <button type="submit">Save to TV / حفظ على التلفزيون</button></form>"""
@@ -225,7 +216,7 @@ fun PhoneSetupScreen(onPlaylistAdded: () -> Unit) {
             Text("Setup from your phone", fontSize = 20.sp, fontWeight = FontWeight.Bold)
             Text("1. Connect your phone to the same Wi-Fi as this TV.", fontSize = 14.sp)
             Text("2. Scan the QR code with your phone camera.", fontSize = 14.sp)
-            Text("3. Enter the Xtream server, addon link/JSON, TMDB/OMDb keys, then tap Save.", fontSize = 14.sp)
+            Text("3. Enter the Xtream server, EPG links, TMDB/OMDb keys, then tap Save.", fontSize = 14.sp)
             url?.let { Text(it, fontSize = 12.sp) }
             if (PhoneSetup.status.isNotBlank()) Text(PhoneSetup.status, fontSize = 14.sp, fontWeight = FontWeight.Bold)
             Text("Works on your home network only. Keep this screen open until you save.", fontSize = 11.sp)

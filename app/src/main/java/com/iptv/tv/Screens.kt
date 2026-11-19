@@ -51,13 +51,45 @@ private fun Group(t: String) {
 }
 
 @Composable
-fun SettingsScreen(goVpn: () -> Unit, goPl: () -> Unit, goAddons: () -> Unit, goPhone: () -> Unit, goCats: () -> Unit, refresh: () -> Unit) {
+fun SettingsScreen(goVpn: () -> Unit, goPl: () -> Unit, goPhone: () -> Unit, goCats: () -> Unit, refresh: () -> Unit, onRestored: () -> Unit) {
+    val ctx = LocalContext.current
     var tick by remember { mutableStateOf(0) }
     var tmdb by remember { mutableStateOf(Store.str("tmdb", "")) }
     var omdb by remember { mutableStateOf(Store.str("omdb", "")) }
     var msg by remember { mutableStateOf("") }
+    var epgList by remember { mutableStateOf(Epg.urls()) }
+    var epgNew by remember { mutableStateOf("") }
     var crash by remember { mutableStateOf(runCatching { java.io.File(Store.dir, "crash.log").takeIf { it.exists() }?.readText()?.take(900) }.getOrNull()) }
     @Suppress("UNUSED_VARIABLE") val t = tick
+
+    // Backup / restore through the system file picker (any folder: internal storage, USB...). Falls back to the app's own folder when the TV has no file manager.
+    val backupPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) msg = runCatching {
+            ctx.contentResolver.openOutputStream(uri)!!.use { it.write(Backup.export().toByteArray()) }
+            "Backup saved"
+        }.getOrElse { "Backup failed: ${it.message}" }
+    }
+    val restorePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            val txt = runCatching { ctx.contentResolver.openInputStream(uri)!!.bufferedReader().readText() }.getOrNull()
+            val err = if (txt == null) "Cannot read file" else Backup.restore(txt)
+            if (err == null) { msg = "Restored"; onRestored() } else msg = err
+        }
+    }
+    fun doBackup() {
+        val name = "iptv-tv-backup-" + java.text.SimpleDateFormat("yyyyMMdd-HHmm", java.util.Locale.US).format(java.util.Date()) + ".json"
+        runCatching { backupPicker.launch(name) }.onFailure {
+            val f = Backup.fallbackFile(ctx)
+            msg = runCatching { f.writeText(Backup.export()); "No file manager found. Saved to: ${f.absolutePath}" }.getOrElse { "Backup failed: ${it.message}" }
+        }
+    }
+    fun doRestore() {
+        runCatching { restorePicker.launch(arrayOf("*/*")) }.onFailure {
+            val f = Backup.fallbackFile(ctx)
+            val err = if (f.exists()) Backup.restore(f.readText()) else "No file manager found and no backup in the app folder"
+            if (err == null) { msg = "Restored"; onRestored() } else msg = err
+        }
+    }
 
     fun cyc(k: String, n: Int, d: Int = 0) { Store.put(k, (Store.int(k, d) + 1) % n); tick++ }
     fun tog(k: String, d: Boolean) { Store.put(k, !Store.bool(k, d)); tick++ }
@@ -72,18 +104,25 @@ fun SettingsScreen(goVpn: () -> Unit, goPl: () -> Unit, goAddons: () -> Unit, go
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Text("Settings", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+        Chip("Setup from phone (QR)", true) { goPhone() }
 
         Group("General")
         Opt("Language / اللغة", lang(Store.str("lang", "auto"))) {
             cycStr("lang", "auto", "en", "ar"); Lang.apply()
         }
-        Opt("Start screen", pick("start", 0, "Movies", "Series", "Live")) { cyc("start", 3) }
+        Opt("Start screen", pick("start", 2, "Movies", "Series", "Live TV", "Last channel (full screen)")) { cyc("start", 4, 2) }
         Opt("Channel numbers", pick("chnum", 0, "List position", "Provider number", "Same in every category", "Off")) { cyc("chnum", 4) }
-        Opt("Sort", pick("sort", 0, "Provider order", "Recently added", "A-Z", "Top rated")) { cyc("sort", 4) }
+        Opt("Sort: Movies & Series", pick("sortVod", 0, "Provider order", "Recently added", "A-Z", "Top rated")) { cyc("sortVod", 4) }
+        Opt("Sort: Live TV", pick("sortLive", 0, "Provider order", "A-Z", "Manual (my order)")) { cyc("sortLive", 3) }
+        Text("Manual order: hold OK on a channel, then choose Rearrange.", fontSize = 11.sp, color = Theme.muted)
+        Chip("Reset all manual channel orders", false) { LiveOrder.clearAll(); msg = "Saved" }
         Opt("Press Back twice to exit", onoff(Store.bool("confirmExit", true))) { tog("confirmExit", true) }
 
         Group("Appearance")
-        Opt("Theme", Theme.modes[Theme.mode]) { Theme.setMode((Theme.mode + 1) % Theme.modes.size); tick++ }
+        Text(tr("Theme") + ": " + tr(Theme.modes[Theme.mode]), Modifier.padding(top = 4.dp), fontSize = 13.sp, color = Color.White)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Theme.palettes.forEachIndexed { i, pal -> Swatch(Color(pal.chip), i == Theme.mode) { Theme.setMode(i); tick++ } }
+        }
         Text(tr("Accent color") + ": " + tr(Theme.accents[Theme.accentIdx].first), Modifier.padding(top = 4.dp), fontSize = 13.sp, color = Color.White)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Theme.accents.forEachIndexed { i, a -> Swatch(Color(a.second), i == Theme.accentIdx) { Theme.setAccent(i); tick++ } }
@@ -99,19 +138,36 @@ fun SettingsScreen(goVpn: () -> Unit, goPl: () -> Unit, goAddons: () -> Unit, go
         Opt("Resume where I stopped", onoff(Store.bool("resume", true))) { tog("resume", true) }
         Opt("Auto-play next episode", onoff(Store.bool("autonext", true))) { tog("autonext", true) }
         Opt("Seek step (Left / Right)", pick("seek", 0, "10 s", "30 s")) { cyc("seek", 2) }
-        Opt("Swap Up / Down channel keys", onoff(Store.bool("swapUpDown", false))) { tog("swapUpDown", false) }
         Opt("Show clock in player", onoff(Store.bool("clock", true))) { tog("clock", true) }
         Opt("Audio language", track(Store.str("alang", ""))) { cycStr("alang", "", "ar", "en") }
         Opt("Subtitle language", track(Store.str("slang", ""))) { cycStr("slang", "", "ar", "en") }
         Opt("Subtitle size", pick("ssize", 1, "Small", "Normal", "Large", "Huge")) { cyc("ssize", 4, 1) }
 
+        Group("Backup")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Chip("Backup to internal storage", true) { doBackup() }
+            Chip("Restore from backup", false) { doRestore() }
+        }
+        Text("Saves playlists, favorites, history, settings, VPN profiles and channel order in one file. The file contains your logins: keep it private.", fontSize = 11.sp, color = Theme.muted)
+
         Group("Library")
         Chip("Choose categories", true) { goCats() }
-        Chip("Setup from phone (QR)", false) { goPhone() }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Chip("Playlists", false) { goPl() }
-            Chip("Addons", false) { goAddons() }
             Chip("VPN profiles", false) { goVpn() }
+        }
+        Group("EPG (optional)")
+        Text("Add as many XMLTV guide links as you like (.xml or .xml.gz). Leave empty to use the provider's guide.", fontSize = 11.sp, color = Theme.muted)
+        epgList.forEach { u ->
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(u, Modifier.width(420.dp), maxLines = 1, fontSize = 12.sp, color = Color.White)
+                Chip("Remove", false) { Epg.remove(u); epgList = Epg.urls() }
+            }
+        }
+        Field("EPG URL (XMLTV)", epgNew) { epgNew = it }
+        Chip("Add EPG URL", false) {
+            val n = Epg.add(epgNew); epgList = Epg.urls()
+            msg = if (n > 0) { epgNew = ""; "Added" } else "Enter a valid http(s) link"
         }
         Field("TMDB API key v3 (rating + age rating)", tmdb) { tmdb = it }
         Field("OMDb API key (exact IMDb rating, optional)", omdb) { omdb = it }
@@ -129,45 +185,6 @@ fun SettingsScreen(goVpn: () -> Unit, goPl: () -> Unit, goAddons: () -> Unit, go
             Text(c, fontSize = 10.sp, color = Color.White)
             Chip("Clear crash log", false) { runCatching { java.io.File(Store.dir, "crash.log").delete() }; crash = null }
         }
-    }
-}
-
-@Composable
-fun AddonScreen(goPhone: () -> Unit = {}) {
-    val ctx = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var list by remember { mutableStateOf(Addons.list()) }
-    var url by remember { mutableStateOf("") }
-    var paste by remember { mutableStateOf("") }
-    var note by remember { mutableStateOf("") }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) runCatching {
-            val t = ctx.contentResolver.openInputStream(uri)!!.bufferedReader().readText()
-            note = Addons.addJson(t, (uri.lastPathSegment ?: "Local").substringAfterLast('/').removeSuffix(".json")) ?: "Added"; list = Addons.list()
-        }.onFailure { note = "Cannot read file" }
-    }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text("Addons (extra film sources)", fontWeight = FontWeight.Bold, color = Color.White)
-        Chip("Add from phone (QR)", true) { goPhone() }
-        list.forEach { a ->
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("${a.name}  (${if (a.kind == "stremio") "link" else "local json"})", Modifier.width(300.dp), maxLines = 1, color = Color.White)
-                Chip("Remove", false) { Addons.remove(a); list = Addons.list() }
-            }
-        }
-        Field("Addon link (manifest.json or stremio://...)", url) { url = it }
-        Chip("Add from link", false) {
-            scope.launch {
-                val r = runCatching { withContext(Dispatchers.IO) { Addons.addUrl(url) } }
-                note = if (r.isFailure) "Failed: ${r.exceptionOrNull()?.message}" else (r.getOrNull() ?: "Added"); list = Addons.list()
-            }
-        }
-        Chip("Import .json file", false) { picker.launch(arrayOf("*/*")) }
-        Field("Or paste JSON text", paste) { paste = it }
-        Chip("Add pasted JSON", false) { note = Addons.addJson(paste, "Local") ?: "Added"; list = Addons.list() }
-        if (note.isNotBlank()) Text(note, fontSize = 13.sp, color = Color.White)
-        Text("Link addons use the Stremio addon format and need your TMDB key (set in Settings). Only direct http(s) stream links play; torrent-only streams are skipped.", fontSize = 11.sp, color = Color.White)
-        Text("Local JSON format: {\"name\":\"My links\",\"streams\":[{\"title\":\"Movie 2010\",\"imdb\":\"tt0000000\",\"url\":\"https://...\"}]}  (matched by IMDb id or title)", fontSize = 11.sp, color = Color.White)
     }
 }
 

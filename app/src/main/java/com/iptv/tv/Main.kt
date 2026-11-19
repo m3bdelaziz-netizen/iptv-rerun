@@ -36,6 +36,32 @@ class MainUi {
     var tab by mutableStateOf(0)          // 0 movies, 1 series, 2 live
     var cat by mutableStateOf("*")        // "*" all, "cw" continue watching, "fav", "radio" or a category id
     var lastIdx = 0                       // last focused grid index, to restore focus on return
+
+    // Live TV home (the vertical list + preview screen). Kept here so Search / Settings can be opened and closed without losing the place.
+    var liveBrowse = "fav"                // category shown in the list (always starts on favorites)
+    var livePlayCat = "fav"               // list the playing channel belongs to (Up / Down zapping)
+    var liveId: String? = null            // key of the playing channel
+    var liveStartFull = false             // open the channel full screen (start option "Last channel")
+    fun openLive() { liveBrowse = "fav"; livePlayCat = "fav"; liveId = null; liveStartFull = false }
+}
+
+/** What the live home should play when it opens. */
+class LiveStart(val args: PlayArgs, val playCat: String, val full: Boolean)
+
+fun liveStart(ui: MainUi): LiveStart {
+    var pc = ui.livePlayCat
+    var chans = liveChannels(pc)
+    val want = ui.liveId
+    var idx = if (want != null) chans.indexOfFirst { it.fkey == want } else -1
+    if (want != null && idx < 0) { pc = "*"; chans = liveChannels("*"); idx = chans.indexOfFirst { it.fkey == want } }
+    var full = ui.liveStartFull && idx >= 0
+    if (want == null) {   // fresh open: show the channel watched last if it is in the list, else the first one
+        val last = Store.str("lastCh_${Store.pid()}", "")
+        idx = chans.indexOfFirst { it.fkey == last }
+    }
+    if (idx < 0) idx = 0
+    if (chans.isEmpty()) full = false
+    return LiveStart(PlayArgs(chans = chans, idx = idx), pc, full)
 }
 
 
@@ -79,37 +105,30 @@ fun MainScreen(
     val ver = Repo.version
     val hv = History.version
     val fv = Store.favs.size
-    val sort = remember { Store.int("sort", 0) }
+    val sort = remember { Store.int("sortVod", Store.int("sort", 0)) }
     val showLabel = remember { !Store.bool("hideLabels", false) }
     val cardMin = remember { when (Store.int("grid", 1)) { 0 -> 100; 2 -> 140; else -> 120 } }
 
     val entries = remember(tab, ver) {
         val l = mutableListOf<Entry>()
-        if (tab == 2) {
-            l += Entry("fav", "★ Favorites"); l += Entry("*", "All channels")
-            Repo.liveCats.forEach { l += Entry(it.id, it.name) }
-            if (Repo.radio.isNotEmpty()) l += Entry("radio", "Radio")
-        } else {
-            l += Entry("cw", "Continue Watching"); l += Entry("fav", "★ Favorites"); l += Entry("", "Categories"); l += Entry("*", "All")
-            (if (tab == 0) Repo.movieCats else Repo.serCats).forEach { l += Entry(it.id, it.name) }
-        }
+        l += Entry("cw", "Continue Watching"); l += Entry("fav", "★ Favorites"); l += Entry("", "Categories"); l += Entry("*", "All")
+        (if (tab == 1) Repo.serCats else Repo.movieCats).forEach { l += Entry(it.id, it.name) }
         l
     }
     val selIdx = entries.indexOfFirst { it.id == cat }.coerceAtLeast(0)
 
     val cells = remember(tab, cat, ver, hv, fv, sort) {
-        fun sorted(l: List<Item>): List<Item> = if (tab == 2) l else when (sort) {
+        fun sorted(l: List<Item>): List<Item> = when (sort) {
             1 -> l.sortedByDescending { it.added }
             2 -> l.sortedBy { it.nn }
             3 -> l.sortedByDescending { it.rating.toDoubleOrNull() ?: 0.0 }
             else -> l
         }
-        val base = when (tab) { 0 -> Repo.movies; 1 -> Repo.series; else -> Repo.live }
+        val base = if (tab == 1) Repo.series else Repo.movies
         when (cat) {
             "cw" -> History.all().filter { it.kind == (if (tab == 0) "movie" else "series") }
                 .distinctBy { if (it.sid.isNotBlank()) it.sid else it.key }.map { Cell(null, it) }
-            "fav" -> sorted((if (tab == 2) Repo.live + Repo.radio else base).filter { Store.favs.contains(it.fkey) }).map { Cell(it) }
-            "radio" -> Repo.radio.map { Cell(it) }
+            "fav" -> sorted(base.filter { Store.favs.contains(it.fkey) }).map { Cell(it) }
             "*" -> sorted(base).map { Cell(it) }
             else -> sorted(base.filter { it.cat == cat }).map { Cell(it) }
         }
@@ -118,23 +137,17 @@ fun MainScreen(
     val restoreIdx = ui.lastIdx.coerceIn(0, maxOf(0, cells.size - 1))
 
     val title = when (cat) {
-        "cw" -> "Continue Watching"; "fav" -> "★ Favorites"; "*" -> if (tab == 2) "All channels" else "All"; "radio" -> "Radio"
+        "cw" -> "Continue Watching"; "fav" -> "★ Favorites"; "*" -> "All"
         else -> entries.firstOrNull { it.id == cat }?.label ?: ""
     }
 
-    var focusedLive by remember { mutableStateOf<Item?>(null) }
-    var epg by remember { mutableStateOf(listOf<String>()) }
-    LaunchedEffect(focusedLive) {
-        epg = emptyList(); val f = focusedLive ?: return@LaunchedEffect; delay(350)
-        epg = withContext(Dispatchers.IO) { runCatching { Api.epg(f.id) }.getOrDefault(emptyList()) }
-    }
-
     fun switchTab(i: Int) {
-        ui.tab = i; ui.cat = "*"; ui.lastIdx = 0; focusedLive = null
+        if (i == 2) ui.openLive()   // Live TV always opens on Favorites
+        ui.tab = i; ui.cat = "*"; ui.lastIdx = 0
         scope.launch { grid.scrollToItem(0); side.scrollToItem(0) }
     }
     fun switchCat(id: String) {
-        ui.cat = id; ui.lastIdx = 0; focusedLive = null
+        ui.cat = id; ui.lastIdx = 0
         scope.launch { grid.scrollToItem(0) }
     }
     fun exitApp() {
@@ -146,12 +159,8 @@ fun MainScreen(
     // ---- Long-press (hold OK) menus: more than just favorites
     fun itemMenu(m: Item, index: Int): MenuState {
         val a = mutableListOf<MenuAction>()
-        if (m.kind == "live" || m.kind == "radio") {
-            a += MenuAction("▶  Play") { onLive(chans, index) }
-        } else {
-            if (m.kind == "movie") a += MenuAction("▶  Play") { onPlay(Media("m${m.id}", Api.vodUrl(m.id, m.ext), m.name, m.img, "movie")) }
-            a += MenuAction("ⓘ Details") { onOpen(m) }
-        }
+        if (m.kind == "movie") a += MenuAction("▶  Play") { onPlay(Media("m${m.id}", Api.vodUrl(m.id, m.ext), m.name, m.img, "movie")) }
+        a += MenuAction("ⓘ Details") { onOpen(m) }
         a += favAction(m)
         val inHistory = History.all().any { if (m.kind == "movie") it.key == "m${m.id}" else m.kind == "series" && it.sid == m.id }
         if (inHistory) a += MenuAction("✕ Remove from Continue Watching") {
@@ -218,13 +227,14 @@ fun MainScreen(
         Column(Modifier.width(210.dp).fillMaxHeight().background(Theme.sidebar).padding(10.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 listOf("Movies", "Series", "Live").forEachIndexed { i, n ->
-                    Chip(n, tab == i, Modifier.weight(1f), 4.dp) { switchTab(i) }
+                    TabPill(n, tab == i, Modifier.weight(1f)) { switchTab(i) }
                 }
             }
             Spacer(Modifier.height(8.dp))
             LazyColumn(Modifier.weight(1f), state = side, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 itemsIndexed(entries) { _, e ->
                     if (e.id.isEmpty()) Text(e.label, Modifier.padding(start = 6.dp, top = 8.dp, bottom = 2.dp), fontSize = 11.sp)
+                    else if (e.id == "fav") FavItem("Favorites", null, e.id == cat, if (e.id == cat) Modifier.focusRequester(selFR) else Modifier) { switchCat(e.id) }
                     else SideItem(e.label, e.id == cat, if (e.id == cat) Modifier.focusRequester(selFR) else Modifier) { switchCat(e.id) }
                 }
             }
@@ -238,7 +248,6 @@ fun MainScreen(
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(title, Modifier.weight(1f), fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (Repo.refreshing) Text("↻", fontSize = 14.sp)
-                Text("${cells.size}", fontSize = 12.sp)
                 Chip("Search", false, Modifier, 10.dp) { onSearch() }
                 Chip(if (Vpn.up != null) "VPN ●" else "Settings", false, Modifier, 10.dp) { onSettings() }
             }
@@ -248,13 +257,13 @@ fun MainScreen(
                 }
             } else {
                 LazyVerticalGrid(
-                    GridCells.Adaptive(if (tab == 2) 190.dp else cardMin.dp), Modifier.weight(1f), state = grid,
+                    GridCells.Adaptive(cardMin.dp), Modifier.weight(1f), state = grid,
                     contentPadding = PaddingValues(16.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     itemsIndexed(cells) { i, c ->
                         val mod = Modifier
-                            .onFocusChanged { if (it.hasFocus) { ui.lastIdx = i; if (tab == 2) focusedLive = c.item } }
+                            .onFocusChanged { if (it.hasFocus) ui.lastIdx = i }
                             .then(if (i == restoreIdx) Modifier.focusRequester(restoreFR) else Modifier)
                         val h = c.hist
                         val m = c.item
@@ -262,20 +271,9 @@ fun MainScreen(
                             PosterCard(h.title, if (h.dur > 0L) "${fmtTime(h.pos)} / ${fmtTime(h.dur)}" else "Next episode", h.img, false, h.progress, showLabel, "", mod, { onResume(h) }, { menu = cwMenu(h) })
                         } else if (m != null) {
                             val fav = Store.favs.contains(m.fkey)
-                            if (tab == 2) LiveCard(ChNum.num(m, i), m.name, m.img, fav, mod, { onLive(chans, i) }, { menu = itemMenu(m, i) })
-                            else {
-                                val rTag = if (Store.bool("rating", true) && m.rating.isNotBlank() && m.rating != "0") "★ ${m.rating}" else ""
-                                PosterCard(m.name, subOf(m), m.img, fav, 0f, showLabel, rTag, mod, { onOpen(m) }, { menu = itemMenu(m, i) })
-                            }
+                            val rTag = if (Store.bool("rating", true) && m.rating.isNotBlank() && m.rating != "0") "★ ${m.rating}" else ""
+                            PosterCard(m.name, subOf(m), m.img, fav, 0f, showLabel, rTag, mod, { onOpen(m) }, { menu = itemMenu(m, i) })
                         }
-                    }
-                }
-            }
-            if (tab == 2) {
-                Column(Modifier.fillMaxWidth().height(58.dp).background(Theme.panel).padding(horizontal = 16.dp, vertical = 4.dp)) {
-                    focusedLive?.let { f ->
-                        Text(f.name, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1)
-                        epg.take(2).forEach { Text(it, fontSize = 11.sp, maxLines = 1) }
                     }
                 }
             }

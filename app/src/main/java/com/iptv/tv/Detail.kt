@@ -39,13 +39,11 @@ fun DetailScreen(item: Item, play: (PlayArgs) -> Unit) {
     var epErr by remember { mutableStateOf("") }
     var retry by remember { mutableStateOf(0) }
     var season by remember { mutableStateOf(-1) }
-    var srcs by remember { mutableStateOf<List<Src>>(emptyList()) }
     val playFR = remember { FocusRequester() }
     val hv = History.version
     val lastKey = "lastEp_${Store.pid()}_${item.id}"
 
     LaunchedEffect(Unit) { delay(120); runCatching { playFR.requestFocus() } }
-    LaunchedEffect(item) { if (item.kind == "movie") srcs = runCatching { Addons.sources(item.name) }.getOrDefault(emptyList()) }
     LaunchedEffect(item) { meta = withContext(Dispatchers.IO) { runCatching { Api.tmdb(item.name, isSeries, item.id) }.getOrNull() } }
     LaunchedEffect(item, retry) {
         if (isSeries) {
@@ -89,7 +87,9 @@ fun DetailScreen(item: Item, play: (PlayArgs) -> Unit) {
                     if (!isSeries) {
                         val h = remember(hv) { History.get(movie.key) }
                         val label = if (h != null && h.pos > 5000) "▶  Resume ${fmtTime(h.pos)}" else "▶  Play"
-                        Chip(label, true, Modifier.focusRequester(playFR)) { play(PlayArgs(vod = listOf(movie))) }
+                        Chip(label, true, Modifier.focusRequester(playFR)) {
+                            play(PlayArgs(vod = listOf(movie)))
+                        }
                     } else {
                         val last = Store.str(lastKey, "")
                         val li = queue.indexOfFirst { it.key == "e$last" }
@@ -105,23 +105,12 @@ fun DetailScreen(item: Item, play: (PlayArgs) -> Unit) {
                     Chip(if (Store.favs.contains(item.fkey)) "★ Unfavorite" else "☆ Favorite", false) { Store.fav(item) }
                 }
 
-                if (!isSeries) {
-                    if (srcs.isNotEmpty()) {
-                        Text("More sources (addons)", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            items(srcs) { x ->
-                                Chip(x.label, false, Modifier.fillMaxWidth()) {
-                                    play(PlayArgs(vod = listOf(Media("u" + x.url.hashCode(), x.url, item.name, item.img, "movie"))))
-                                }
-                            }
-                        }
-                    }
-                } else if (!loaded) {
+                if (isSeries && !loaded) {
                     Text("Loading...", fontSize = 12.sp)
-                } else if (eps.isEmpty()) {
+                } else if (isSeries && eps.isEmpty()) {
                     Text("Could not load episodes: $epErr", fontSize = 12.sp, color = Color(0xFFFF6B6B))
                     Chip("Retry", true) { retry++ }
-                } else {
+                } else if (isSeries) {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         items(eps.map { it.season }.distinct()) { s -> Chip("Season $s", s == season) { season = s } }
                     }

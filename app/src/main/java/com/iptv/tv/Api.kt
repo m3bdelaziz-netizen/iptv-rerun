@@ -50,6 +50,7 @@ object Store {
     fun init(c: Context) {
         sp = c.getSharedPreferences("cfg", 0)
         dir = c.filesDir
+        migrate()
         if (!sp.contains("pls")) {
             // Prefs were wiped (or first run after an update): restore from the backup file, else migrate the old single-server settings.
             val txt = runCatching { backup().readText() }.getOrNull()
@@ -60,6 +61,8 @@ object Store {
         }
     }
     fun bool(k: String, d: Boolean) = sp.getBoolean(k, d)
+    /** Old versions had a single "sort" setting; it becomes the movies/series sort. */
+    fun migrate() { if (!sp.contains("sortVod") && sp.contains("sort")) sp.edit().putInt("sortVod", sp.getInt("sort", 0)).apply() }
     fun int(k: String, d: Int) = sp.getInt(k, d)
     fun str(k: String, d: String) = sp.getString(k, d) ?: d
     fun put(k: String, v: Any) {
@@ -328,14 +331,6 @@ object Api {
         val m = Meta(backdrop.ifBlank { null }, overview, rating, year, 0, cast, director, cert, trailer, src, note)
         if (note.isBlank()) cache[ck] = m
         return m
-    }
-
-    /** IMDb id for a film title (needs the TMDB key), used by Stremio-style addons. */
-    fun imdb(title: String): String? {
-        if (c.tmdb.isBlank()) return null
-        val hit = tmdbFind(title, false) ?: return null
-        val x = JSONObject(get("$TMDB/movie/${hit.getInt("id")}/external_ids?api_key=${c.tmdb}", 15000)).s("imdb_id")
-        return x.ifBlank { null }
     }
 
     private val tagWords = listOf(

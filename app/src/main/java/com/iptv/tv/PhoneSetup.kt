@@ -166,7 +166,7 @@ object PhoneSetup {
     private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
     private fun page(title: String, body: String) = """<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>IPTV TV setup</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Waleen IPTV setup</title>
 <style>body{font-family:system-ui,sans-serif;background:#0b0e1a;color:#fff;margin:0;padding:20px;max-width:480px}
 h2{margin-top:0}label{display:block;margin:14px 0 4px;font-size:14px;color:#b8c0e0}
 input,textarea{width:100%;box-sizing:border-box;padding:12px;font-size:16px;border-radius:8px;border:1px solid #3b4366;background:#1a1f30;color:#fff}

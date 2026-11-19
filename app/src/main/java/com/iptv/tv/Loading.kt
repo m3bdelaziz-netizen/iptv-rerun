@@ -42,6 +42,7 @@ fun LoadingScreen(slow: Boolean, onPlaylists: () -> Unit, onRetry: () -> Unit) {
                 drawArc(Color(0x22FFFFFF), 0f, 360f, false, tl, box, style = Stroke(sw))
                 drawArc(Theme.accent, angle, 110f, false, tl, box, style = Stroke(sw, cap = StrokeCap.Round))
             }
+            Text("Waleen IPTV", fontSize = 26.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFC857))
             Text("Loading your library", fontSize = 20.sp, fontWeight = FontWeight.Bold)
             Text(if (slow) "Taking longer than usual..." else "Just a moment", Modifier.alpha(pulse), fontSize = 12.sp, color = Theme.muted)
             if (slow) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

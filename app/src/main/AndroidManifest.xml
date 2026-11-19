@@ -2,7 +2,7 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-feature android:name="android.software.leanback" android:required="false"/>
     <uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
-    <application android:label="Waleen IPTV" android:icon="@drawable/ic_launcher" android:banner="@drawable/banner"
+    <application android:label="Waleen IPTV" android:roundIcon="@drawable/ic_waleen" android:icon="@drawable/ic_waleen" android:banner="@drawable/waleen_banner"
         android:usesCleartextTraffic="true" android:supportsRtl="true" android:largeHeap="true" android:theme="@style/AppTheme">
         <activity android:name=".MainActivity" android:exported="true"
             android:configChanges="orientation|screenSize|keyboardHidden|keyboard|navigation|uiMode">

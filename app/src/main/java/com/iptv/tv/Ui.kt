@@ -26,6 +26,7 @@ import android.widget.Toast
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -313,7 +314,7 @@ fun favAction(m: Item) = MenuAction(if (Store.favs.contains(m.fkey)) "★ Remove
 
 /** The popup shown on long press (hold OK). First option gets focus; Back closes it. */
 @Composable
-fun OptionsDialog(title: String, actions: List<MenuAction>, onDismiss: () -> Unit, width: Dp = 320.dp, footer: String = "", fromHold: Boolean = true) {
+fun OptionsDialog(title: String, actions: List<MenuAction>, width: Dp = 320.dp, footer: String = "", fromHold: Boolean = true, onDismiss: () -> Unit) {
     val fr = remember { FocusRequester() }
     // The menu opens while the OK button is still held. Ignore OK until it has been released once,
     // otherwise the key-up lands on the first option ("Play") and starts the film.

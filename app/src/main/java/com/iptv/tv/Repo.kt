@@ -58,7 +58,8 @@ object Repo {
         version++
     }
 
-    private fun applyRaw(raw: Map<String, String?>) {
+    /** Live categories + channels only: this is all that is needed to open the app on Live TV. */
+    private fun applyLive(raw: Map<String, String?>) {
         val cats0 = Api.parseCats(raw["get_live_categories"] ?: "[]")
         allLiveCats = cats0
         val selL = validSel("live", cats0)
@@ -69,6 +70,11 @@ object Repo {
         liveCats = cats.filter { it.id !in rid }; radioCats = cats.filter { it.id in rid }
         live = all.filter { it.cat !in rid }
         radio = all.filter { it.cat in rid }.map { it.copy(kind = "radio") }
+        version++
+    }
+
+    /** Movies + series (the big lists). Parsed after Live TV is already on screen. */
+    private fun applyVod(raw: Map<String, String?>) {
         allMovieCats = runCatching { Api.parseCats(raw["get_vod_categories"] ?: "[]") }.getOrDefault(emptyList())
         val selM = validSel("movie", allMovieCats)
         movieCats = if (selM == null) allMovieCats else allMovieCats.filter { it.id in selM }
@@ -82,6 +88,8 @@ object Repo {
         version++
     }
 
+    private fun applyRaw(raw: Map<String, String?>) { applyLive(raw); applyVod(raw) }
+
     /** Re-applies the category selection from the on-disk cache (no network, no reload of the provider). */
     suspend fun reapply() {
         val pid = Store.pid()
@@ -94,18 +102,29 @@ object Repo {
         withContext(Dispatchers.Default) { runCatching { applyRaw(raw) } }
     }
 
-    /** Reads the on-disk library and applies it. Returns the cache's timestamp, or null when there is no usable cache. */
+    /**
+     * Reads the on-disk library and applies it. Live TV comes first (a few thousand channels): as soon as it is parsed the app is
+     * ready and opens on Live. The much larger movie and series lists are read and parsed afterwards, in the background.
+     * Returns the cache's timestamp, or null when there is no usable cache.
+     */
     private suspend fun loadCache(): Long? {
         val pid = Store.pid()
+        val liveNames = names.take(2)
         val cached = withContext(Dispatchers.IO) {
             val m = HashMap<String, String?>()
-            names.forEach { n -> val f = file(pid, n); m[n] = if (f.exists()) runCatching { f.readText() }.getOrNull() else null }
+            liveNames.forEach { n -> val f = file(pid, n); m[n] = if (f.exists()) runCatching { f.readText() }.getOrNull() else null }
             if (m["get_live_streams"] == null) null else Pair(m, file(pid, "get_live_streams").lastModified())
         } ?: return null
-        val ok = withContext(Dispatchers.Default) { runCatching { applyRaw(cached.first) }.isSuccess }
+        val ok = withContext(Dispatchers.Default) { runCatching { applyLive(cached.first) }.isSuccess }
         if (!ok) return null
         ready = true
         cacheTs = cached.second
+        val vod = withContext(Dispatchers.IO) {
+            val m = HashMap<String, String?>()
+            names.drop(2).forEach { n -> val f = file(pid, n); m[n] = if (f.exists()) runCatching { f.readText() }.getOrNull() else null }
+            m
+        }
+        withContext(Dispatchers.Default) { runCatching { applyVod(vod) } }
         return cached.second
     }
 

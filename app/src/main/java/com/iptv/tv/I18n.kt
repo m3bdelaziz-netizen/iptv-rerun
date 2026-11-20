@@ -111,12 +111,14 @@ private val AR = mapOf(
     "Cache cleared. Reload failed: use Refresh playlist now" to "تم مسح الذاكرة المؤقتة. فشل التحميل: استخدم تحديث القائمة الآن",
     "Choose a backup to restore" to "اختر نسخة احتياطية للاستعادة", "No backup found. Make a backup first." to "لا توجد نسخة احتياطية. أنشئ نسخة أولًا.",
     "Browse files..." to "تصفح الملفات...", "No file manager on this TV" to "لا يوجد مدير ملفات على هذا التلفاز", "Cannot read file" to "تعذر قراءة الملف",
-    "Ocean" to "المحيط", "Forest" to "الغابة", "Crimson" to "قرمزي", "Royal" to "ملكي", "Mocha" to "موكا", "Slate" to "أردوازي", "Sunset" to "الغروب", "Teal Noir" to "فيروزي داكن",
-    "Favorite" to "المفضلة", "Favorited" to "في المفضلة", "Trailer" to "الإعلان", "Trailers" to "الإعلانات", "Restart" to "من البداية",
-    "Cast" to "طاقم التمثيل", "Movie Details" to "تفاصيل الفيلم", "Series Details" to "تفاصيل المسلسل",
-    "Status" to "الحالة", "Release Info" to "تاريخ الإصدار", "Runtime" to "المدة", "Certification" to "التصنيف العمري", "Origin Country" to "بلد الإنتاج",
-    "Director:" to "المخرج:", "Creator:" to "المؤلف:", "Writer:" to "الكاتب:", "Show More ▾" to "عرض المزيد ▾", "Show Less ▴" to "عرض أقل ▴",
-    "No app found to play the trailer" to "لا يوجد تطبيق لتشغيل الإعلان"
+    "Remote control" to "جهاز التحكم", "Not set" to "غير محدد", "Top icons" to "الأيقونات العلوية", "Last channel" to "آخر قناة",
+    "Recent channels" to "القنوات الأخيرة", "Channel up" to "القناة التالية", "Channel down" to "القناة السابقة",
+    "List / full screen" to "القائمة / ملء الشاشة", "Favorite on/off" to "مفضلة نعم/لا", "Reset remote control" to "إعادة ضبط جهاز التحكم",
+    "OK (hold down)" to "OK (ضغط مطول)", "Left" to "يسار", "Left (hold down)" to "يسار (ضغط مطول)", "Right" to "يمين",
+    "Right (hold down)" to "يمين (ضغط مطول)", "Up" to "أعلى", "Up (hold down)" to "أعلى (ضغط مطول)", "Down" to "أسفل",
+    "Down (hold down)" to "أسفل (ضغط مطول)", "No previous channel yet" to "لا توجد قناة سابقة بعد",
+    "No recent channels yet" to "لا توجد قنوات أخيرة بعد", "☰  All channels" to "☰  كل القنوات", "Color" to "اللون",
+    "Ocean" to "المحيط", "Forest" to "الغابة", "Crimson" to "قرمزي", "Royal" to "ملكي", "Mocha" to "موكا", "Slate" to "أردوازي", "Sunset" to "الغروب", "Teal Noir" to "فيروزي داكن"
 )
 private val PRE = listOf(
     "Season " to "الموسم ", "Error: " to "خطأ: ", "Playback error: " to "خطأ في التشغيل: ", "Login failed: " to "فشل تسجيل الدخول: ",

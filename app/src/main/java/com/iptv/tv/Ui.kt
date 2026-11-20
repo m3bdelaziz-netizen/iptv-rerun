@@ -111,12 +111,23 @@ fun creds(): Creds {
     return Creds(p?.server ?: "", p?.user ?: "", p?.pass ?: "", Store.sp.getString("tmdb", "") ?: "")
 }
 
+/** Start screen: 0 Movies, 1 Series, 2 Live TV (default), 3 last channel full screen. Applied before the first frame so Live opens without flashing another screen. */
+private fun applyStart(ui: MainUi) {
+    val st = Store.int("start", 2).coerceIn(0, 3)
+    ui.openLive()
+    if (st == 3) {
+        val last = Store.str("lastCh_${Store.pid()}", "")
+        ui.tab = 2
+        if (last.isNotBlank()) { ui.liveId = last; ui.livePlayCat = Store.str("lastChCat_${Store.pid()}", "*"); ui.liveStartFull = true }
+    } else ui.tab = st
+}
+
 @Composable
 fun App() {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     val stack = remember { mutableStateListOf<Route>(Route.Main) }
-    val ui = remember { MainUi() }
+    val ui = remember { MainUi().also { applyStart(it) } }
     val grid = rememberLazyGridState()
     val push: (Route) -> Unit = { stack.add(it) }
     val pop: () -> Unit = { if (stack.size > 1) stack.removeAt(stack.lastIndex) }
@@ -144,14 +155,6 @@ fun App() {
 
     LaunchedEffect(Unit) {
         Store.loadFavs(); Api.c = creds()
-        // Start screen: 0 Movies, 1 Series, 2 Live TV (default), 3 last channel full screen
-        val st = Store.int("start", 2).coerceIn(0, 3)
-        ui.openLive()
-        if (st == 3) {
-            val last = Store.str("lastCh_${Store.pid()}", "")
-            ui.tab = 2
-            if (last.isNotBlank()) { ui.liveId = last; ui.livePlayCat = Store.str("lastChCat_${Store.pid()}", "*"); ui.liveStartFull = true }
-        } else ui.tab = st
         // Only ask for a playlist when none is saved. Otherwise open straight into the cached library.
         if (Api.c.server.isBlank()) { stack.add(Route.Playlists); return@LaunchedEffect }
         Repo.showCached()
@@ -292,11 +295,11 @@ fun SideItem(t: String, sel: Boolean, w: Modifier = Modifier, f: () -> Unit) {
 
 /** Image decoded at a small fixed size: much lighter on memory/CPU than loading full posters. */
 @Composable
-fun Img(url: String, mod: Modifier, scale: ContentScale = ContentScale.Crop, w: Int = 300, h: Int = 450, align: Alignment = Alignment.Center) {
+fun Img(url: String, mod: Modifier, scale: ContentScale = ContentScale.Crop, w: Int = 300, h: Int = 450) {
     if (url.isBlank()) return
     val ctx = LocalContext.current
     val req = remember(url, w, h) { ImageRequest.Builder(ctx).data(url).size(w, h).crossfade(false).build() }
-    AsyncImage(model = req, contentDescription = null, modifier = mod, contentScale = scale, alignment = align)
+    AsyncImage(model = req, contentDescription = null, modifier = mod, contentScale = scale)
 }
 
 @Composable

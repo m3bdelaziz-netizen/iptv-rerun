@@ -28,7 +28,7 @@ import kotlinx.coroutines.withContext
 private fun hostOf(s: String) = s.trim().removePrefix("http://").removePrefix("https://").trimEnd('/')
 
 @Composable
-private fun PlaylistRow(p: Pl, active: Boolean, fr: FocusRequester?, onUse: () -> Unit, onRemove: () -> Unit) {
+private fun PlaylistRow(p: Pl, active: Boolean, dot: Color, fr: FocusRequester?, onUse: () -> Unit, onColor: () -> Unit, onRemove: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().background(Theme.card, RoundedCornerShape(16.dp)).padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)
@@ -39,6 +39,7 @@ private fun PlaylistRow(p: Pl, active: Boolean, fr: FocusRequester?, onUse: () -
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PlDot(dot, 14.dp)
                 Text(p.name, Modifier.weight(1f, fill = false), fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Color.White)
                 if (active) Box(Modifier.background(Theme.accent.copy(alpha = 0.25f), RoundedCornerShape(50)).padding(horizontal = 8.dp, vertical = 2.dp)) {
                     Text("ACTIVE", fontSize = 9.sp, fontWeight = FontWeight.Bold, color = Theme.accent)
@@ -47,6 +48,7 @@ private fun PlaylistRow(p: Pl, active: Boolean, fr: FocusRequester?, onUse: () -
             Text(hostOf(p.server) + "   ·   " + p.user, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, color = Theme.muted)
         }
         Chip(if (active) "✓ In use" else "Use", active, if (fr != null) Modifier.focusRequester(fr) else Modifier) { onUse() }
+        Chip("Color", false, Modifier, 10.dp) { onColor() }
         Chip("Remove", false) { onRemove() }
     }
 }
@@ -68,11 +70,13 @@ fun PlaylistScreen(onChanged: () -> Unit, goPhone: () -> Unit, onClose: () -> Un
     var msg by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     val listFR = remember { FocusRequester() }
-    val nameFR = remember { FocusRequester() }
+    val phoneFR = remember { FocusRequester() }
+    var dotTick by remember { mutableStateOf(0) }   // changes when a playlist colour is changed
 
+    // First install: the cursor starts on "Setup from phone (QR)", the quickest way to add a playlist.
     LaunchedEffect(pls.size) {
         delay(150)
-        runCatching { if (pls.isEmpty()) nameFR.requestFocus() else listFR.requestFocus() }
+        runCatching { if (pls.isEmpty()) phoneFR.requestFocus() else listFR.requestFocus() }
     }
 
     fun use(i: Int) {
@@ -123,7 +127,9 @@ fun PlaylistScreen(onChanged: () -> Unit, goPhone: () -> Unit, onClose: () -> Un
             } else {
                 LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 4.dp)) {
                     itemsIndexed(pls, key = { _, p -> p.id }) { i, p ->
-                        PlaylistRow(p, i == active, if (i == active) listFR else null, { use(i) }, { confirm = i })
+                        @Suppress("UNUSED_VARIABLE") val dt = dotTick
+                        PlaylistRow(p, i == active, PlColor.of(p.id), if (i == active) listFR else null, { use(i) },
+                            { PlColor.next(p.id); dotTick++ }, { confirm = i })
                     }
                 }
             }
@@ -136,8 +142,9 @@ fun PlaylistScreen(onChanged: () -> Unit, goPhone: () -> Unit, onClose: () -> Un
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Text("Add playlist", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            Chip("Setup from phone (QR)", true, Modifier.fillMaxWidth().focusRequester(phoneFR)) { goPhone() }
             Text("Xtream Codes login from your provider", fontSize = 11.sp, color = Theme.muted)
-            Field("Name (optional)", name, false, Modifier.focusRequester(nameFR), 1f) { name = it; msg = "" }
+            Field("Name (optional)", name, false, Modifier, 1f) { name = it; msg = "" }
             Field("Server (http://host:port)", server, false, Modifier, 1f) { server = it; msg = "" }
             Field("Username", user, false, Modifier, 1f) { user = it; msg = "" }
             Field("Password", pass, true, Modifier, 1f) { pass = it; msg = "" }
@@ -145,10 +152,7 @@ fun PlaylistScreen(onChanged: () -> Unit, goPhone: () -> Unit, onClose: () -> Un
                 val bad = msg.startsWith("Login failed") || msg.startsWith("Fill")
                 Text(msg, fontSize = 12.sp, color = if (bad) Color(0xFFFF6B6B) else Theme.muted)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Chip(if (busy) "Connecting..." else "Add & connect", true) { add() }
-                Chip("Setup from phone (QR)", false) { goPhone() }
-            }
+            Chip(if (busy) "Connecting..." else "Add & connect", true) { add() }
         }
     }
 

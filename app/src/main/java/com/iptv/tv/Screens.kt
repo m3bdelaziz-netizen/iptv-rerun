@@ -30,9 +30,9 @@ import kotlinx.coroutines.withContext
 @Composable
 fun Opt(label: String, value: String, f: () -> Unit) {
     Button(
-        onClick = f, modifier = Modifier.fillMaxWidth(0.85f),
+        onClick = f, modifier = Modifier.fillMaxWidth(),
         colors = focusColors(Theme.chip),
-        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 5.dp)
     ) {
         Text(label, Modifier.weight(1f), fontSize = 13.sp, maxLines = 1, color = Color.White)
         Text(value, fontSize = 13.sp, fontWeight = FontWeight.Bold, maxLines = 1, color = Color.White)
@@ -42,15 +42,15 @@ fun Opt(label: String, value: String, f: () -> Unit) {
 @Composable
 private fun Swatch(c: Color, sel: Boolean, f: () -> Unit) {
     Button(
-        onClick = f, modifier = Modifier.width(46.dp).height(34.dp),
+        onClick = f, modifier = Modifier.width(32.dp).height(30.dp),
         colors = ButtonDefaults.colors(containerColor = c, focusedContainerColor = c),
         contentPadding = PaddingValues(0.dp)
-    ) { Text(if (sel) "✓" else "", fontSize = 14.sp, color = Color.White) }
+    ) { Text(if (sel) "✓" else "", fontSize = 12.sp, color = Color.White) }
 }
 
 @Composable
 private fun Group(t: String) {
-    Text(t, Modifier.padding(top = 12.dp, bottom = 2.dp), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Theme.accent)
+    Text(t, Modifier.padding(top = 8.dp, bottom = 0.dp), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Theme.accent)
 }
 
 @Composable
@@ -63,6 +63,7 @@ fun SettingsScreen(goVpn: () -> Unit, goPl: () -> Unit, goPhone: () -> Unit, goC
     var msg by remember { mutableStateOf("") }
     var epgList by remember { mutableStateOf(Epg.urls()) }
     var epgNew by remember { mutableStateOf("") }
+    var remoteSlot by remember { mutableStateOf<Int?>(null) }
     var crash by remember { mutableStateOf(runCatching { java.io.File(Store.dir, "crash.log").takeIf { it.exists() }?.readText()?.take(900) }.getOrNull()) }
     @Suppress("UNUSED_VARIABLE") val t = tick
 
@@ -112,12 +113,16 @@ fun SettingsScreen(goVpn: () -> Unit, goPl: () -> Unit, goPhone: () -> Unit, goC
     fun track(v: String) = when (v) { "ar" -> "Arabic"; "en" -> "English"; else -> "Auto" }
 
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 14.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Text("Settings", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
-        Chip("Setup from phone (QR)", true) { goPhone() }
-
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Text("Settings", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            Chip("Setup from phone (QR)", true) { goPhone() }
+        }
+        // Two columns so more fits on one screen; the whole page scrolls together.
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.Top) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
         Group("General")
         Opt("Language / اللغة", lang(Store.str("lang", "auto"))) {
             cycStr("lang", "auto", "en", "ar"); Lang.apply()
@@ -132,11 +137,11 @@ fun SettingsScreen(goVpn: () -> Unit, goPl: () -> Unit, goPhone: () -> Unit, goC
 
         Group("Appearance")
         Text(tr("Theme") + ": " + tr(Theme.modes[Theme.mode]), Modifier.padding(top = 4.dp), fontSize = 13.sp, color = Color.White)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             Theme.palettes.forEachIndexed { i, pal -> Swatch(Color(pal.chip), i == Theme.mode) { Theme.setMode(i); tick++ } }
         }
         Text(tr("Accent color") + ": " + tr(Theme.accents[Theme.accentIdx].first), Modifier.padding(top = 4.dp), fontSize = 13.sp, color = Color.White)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
             Theme.accents.forEachIndexed { i, a -> Swatch(Color(a.second), i == Theme.accentIdx) { Theme.setAccent(i); tick++ } }
         }
         Opt("Poster size", pick("grid", 1, "Small", "Medium", "Large")) { cyc("grid", 3, 1) }
@@ -155,6 +160,19 @@ fun SettingsScreen(goVpn: () -> Unit, goPl: () -> Unit, goPhone: () -> Unit, goC
         Opt("Subtitle language", track(Store.str("slang", ""))) { cycStr("slang", "", "ar", "en") }
         Opt("Subtitle size", pick("ssize", 1, "Small", "Normal", "Large", "Huge")) { cyc("ssize", 4, 1) }
 
+        Group("Backup")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Chip("Backup to internal storage", true) { doBackup() }
+            Chip("Restore from backup", false) { doRestore() }
+        }
+        Text("Saved to Downloads/Waleen (no file manager needed). Contains playlists, favorites, history, settings, VPN profiles and channel order. The file contains your logins: keep it private.", fontSize = 11.sp, color = Theme.muted)
+
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Group("Remote control")
+        Text("Press OK on a row, then choose what that key does. Short presses (Left / Right / Up / Down) work in Live full screen; holds work in the live list, movies / series and the live player. P+ / P- move a list one page.", fontSize = 11.sp, color = Theme.muted)
+        for (slot in Remote.slotNames.indices) Opt(Remote.slotNames[slot], Remote.label(slot)) { remoteSlot = slot }
+        Chip("Reset remote control", false) { Remote.reset(); tick++; msg = "Saved" }
         Group("Library")
         Opt("Refresh playlist now", if (Repo.refreshing) "Refreshing..." else if (Repo.cacheTs > 0L) "Last: " + lastFmt.format(java.util.Date(Repo.cacheTs)) else "") { doRefresh() }
         Opt("Auto refresh", pick("autoref", 2, "Off", "Every 4 hours", "Every 12 hours", "Every 24 hours")) { cyc("autoref", 4, 2) }
@@ -166,32 +184,27 @@ fun SettingsScreen(goVpn: () -> Unit, goPl: () -> Unit, goPhone: () -> Unit, goC
             Chip("VPN profiles", false) { goVpn() }
         }
 
-        Group("Backup")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Chip("Backup to internal storage", true) { doBackup() }
-            Chip("Restore from backup", false) { doRestore() }
-        }
-        Text("Saved to Downloads/Waleen (no file manager needed). Contains playlists, favorites, history, settings, VPN profiles and channel order. The file contains your logins: keep it private.", fontSize = 11.sp, color = Theme.muted)
-
         Group("EPG (optional)")
         Text("Add as many XMLTV guide links as you like (.xml or .xml.gz). Leave empty to use the provider's guide.", fontSize = 11.sp, color = Theme.muted)
         epgList.forEach { u ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(u, Modifier.width(420.dp), maxLines = 1, fontSize = 12.sp, color = Color.White)
+                Text(u, Modifier.weight(1f), maxLines = 1, fontSize = 12.sp, color = Color.White)
                 Chip("Remove", false) { Epg.remove(u); epgList = Epg.urls() }
             }
         }
-        Field("EPG URL (XMLTV)", epgNew) { epgNew = it }
+        Field("EPG URL (XMLTV)", epgNew, frac = 1f) { epgNew = it }
         Chip("Add EPG URL", false) {
             val n = Epg.add(epgNew); epgList = Epg.urls()
             msg = if (n > 0) { epgNew = ""; "Added" } else "Enter a valid http(s) link"
         }
-        Field("TMDB API key v3 (rating + age rating)", tmdb) { tmdb = it }
-        Field("OMDb API key (exact IMDb rating, optional)", omdb) { omdb = it }
+        Field("TMDB API key v3 (rating + age rating)", tmdb, frac = 1f) { tmdb = it }
+        Field("OMDb API key (exact IMDb rating, optional)", omdb, frac = 1f) { omdb = it }
         Chip("Save keys", true) { Store.put("tmdb", tmdb.trim()); Store.put("omdb", omdb.trim()); Api.c = Api.c.copy(tmdb = tmdb.trim()); msg = "Saved" }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Chip("Clear favorites", false) { Store.clearFavs(); msg = "Saved" }
             Chip("Clear continue watching", false) { History.clear(); msg = "Saved" }
+        }
+            }
         }
         if (msg.isNotBlank()) Text(msg, color = Color.White)
         crash?.let { c ->
@@ -199,6 +212,12 @@ fun SettingsScreen(goVpn: () -> Unit, goPl: () -> Unit, goPhone: () -> Unit, goC
             Text(c, fontSize = 10.sp, color = Color.White)
             Chip("Clear crash log", false) { runCatching { java.io.File(Store.dir, "crash.log").delete() }; crash = null }
         }
+    }
+
+    remoteSlot?.let { sl ->
+        OptionsDialog(tr(Remote.slotNames[sl]), Remote.choices(sl).map { a ->
+            MenuAction((if (Remote.get(sl) == a) "✓  " else "") + Remote.labels[a]) { Remote.set(sl, a); tick++ }
+        }, 340.dp, "", false) { remoteSlot = null }
     }
 
     restoreList?.let { found ->

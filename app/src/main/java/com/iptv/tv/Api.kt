@@ -25,8 +25,12 @@ data class Item(val id: String, val name: String, val img: String, val kind: Str
     val fkey: String get() = "$kind:$id"
 }
 data class Ep(val id: String, val title: String, val season: Int, val num: Int, val ext: String)
+data class Person(val name: String, val role: String, val img: String)
+data class Trailer(val title: String, val key: String)
 data class Meta(val backdrop: String?, val overview: String, val rating: String, val year: String, val id: Int = 0, val cast: String = "", val director: String = "", val cert: String = "", val trailer: String = "",
-                val ratingSrc: String = "", val note: String = "")
+                val ratingSrc: String = "", val note: String = "",
+                val genres: String = "", val runtime: String = "", val writer: String = "", val status: String = "", val country: String = "",
+                val logo: String = "", val release: String = "", val people: List<Person> = emptyList(), val trailers: List<Trailer> = emptyList())
 data class Guide(val cert: String, val tags: List<String>)
 
 data class Prog(val start: Long, val stop: Long, val title: String)
@@ -277,24 +281,58 @@ object Api {
     private fun positive(s: String) = (s.toDoubleOrNull() ?: 0.0) > 0.0
     private fun fmt1(d: Double) = "%.1f".format(Locale.US, d)
 
-    /** Details page data. Provider info first, TMDB for rating / age rating / cast, OMDb (optional key) for the real IMDb score. Never throws. */
+    private const val IMG_S = "https://image.tmdb.org/t/p/w185"
+    private const val IMG_L = "https://image.tmdb.org/t/p/w500"
+
+    private fun fmtRun(min: Int): String = if (min <= 0) "" else if (min >= 60) (if (min % 60 == 0) "${min / 60}h" else "${min / 60}h ${min % 60}m") else "${min}m"
+
+    /** "01:36:00" -> 96 (minutes). */
+    private fun durMin(s: String): Int {
+        val p = s.trim().split(":").mapNotNull { it.toIntOrNull() }
+        return when (p.size) { 3 -> p[0] * 60 + p[1]; 2 -> p[0] * 60 + p[1]; 1 -> p[0]; else -> 0 }
+    }
+
+    private fun ytKey(s: String): String {
+        val t = s.trim()
+        if (t.isBlank()) return ""
+        Regex("(?:v=|youtu\\.be/|embed/)([A-Za-z0-9_-]{11})").find(t)?.let { return it.groupValues[1] }
+        return if (Regex("^[A-Za-z0-9_-]{11}$").matches(t)) t else ""
+    }
+
+    private fun names(a: JSONArray?, key: String = "name", max: Int = 3): List<String> {
+        if (a == null) return emptyList()
+        val out = linkedSetOf<String>()
+        for (i in 0 until a.length()) { val n = a.optJSONObject(i)?.s(key).orEmpty(); if (n.isNotBlank()) out.add(n); if (out.size >= max) break }
+        return out.toList()
+    }
+
+    /** Details page data. Provider info first, TMDB for rating / age rating / cast / trailers / logo, OMDb (optional key) for the real IMDb score. Never throws. */
     fun tmdb(name: String, series: Boolean, id: String = ""): Meta {
         val omdb = Store.str("omdb", "")
         val ck = "$series:$id:$name:${c.tmdb.isNotBlank()}:${omdb.isNotBlank()}"
         cache[ck]?.let { return it }
         var backdrop = ""; var overview = ""; var rating = ""; var src = ""; var year = ""
         var cast = ""; var director = ""; var cert = ""; var trailer = ""; var note = ""
+        var genres = ""; var runtime = ""; var writer = ""; var status = ""; var country = ""; var logo = ""; var release = ""
+        var people = emptyList<Person>()
+        val trailers = ArrayList<Trailer>()
 
         if (id.isNotBlank()) runCatching {
             val j = if (series) JSONObject(act("get_series_info", "series_id=$id")) else JSONObject(act("get_vod_info", "vod_id=$id"))
             val info = j.optJSONObject("info") ?: JSONObject()
             overview = info.s("plot").ifEmpty { info.s("description") }
             rating = info.s("rating").ifEmpty { info.s("kinopoisk_rating") }.takeIf { positive(it) } ?: ""
-            year = info.s("releasedate").ifEmpty { info.s("releaseDate") }.ifEmpty { info.s("year") }.take(4)
+            release = info.s("releasedate").ifEmpty { info.s("releaseDate") }
+            year = release.ifEmpty { info.s("year") }.take(4)
             backdrop = info.optJSONArray("backdrop_path")?.optString(0) ?: ""
             cast = info.s("cast"); director = info.s("director"); trailer = info.s("youtube_trailer")
             cert = info.s("age").ifEmpty { info.s("mpaa") }
+            genres = info.s("genre").split(",", "/").map { it.trim() }.filter { it.isNotBlank() }.joinToString(" • ")
+            country = info.s("country")
+            val secs = info.optInt("duration_secs", 0)
+            runtime = fmtRun(if (secs > 0) secs / 60 else durMin(info.s("duration")).takeIf { it > 0 } ?: info.s("episode_run_time").toIntOrNull() ?: 0)
         }
+        ytKey(trailer).takeIf { it.isNotBlank() }?.let { trailers.add(Trailer("Trailer", it)) }
 
         if (c.tmdb.isBlank()) {
             note = "Add your TMDB key in Settings to see rating and age rating"
@@ -309,11 +347,57 @@ object Api {
                 if (backdrop.isBlank()) hit.s("backdrop_path").takeIf { it.isNotBlank() }?.let { backdrop = IMG + it }
                 val vote = hit.optDouble("vote_average", 0.0)
                 if (vote > 0.0) { rating = fmt1(vote); src = "TMDB" }
-                val extra = if (series) "credits,content_ratings,external_ids" else "credits,release_dates,external_ids"
-                val d = JSONObject(get("$TMDB/$type/$tid?api_key=${c.tmdb}&append_to_response=$extra", 15000))
-                if (cast.isBlank()) d.optJSONObject("credits")?.optJSONArray("cast")?.let { ca ->
-                    cast = (0 until minOf(5, ca.length())).joinToString(", ") { ca.getJSONObject(it).s("name") }
+                val extra = if (series) "credits,content_ratings,external_ids,videos,images" else "credits,release_dates,external_ids,videos,images"
+                val d = JSONObject(get("$TMDB/$type/$tid?api_key=${c.tmdb}&append_to_response=$extra&include_image_language=en,null", 15000))
+
+                // cast with photos
+                val ca = d.optJSONObject("credits")?.optJSONArray("cast")
+                if (ca != null && ca.length() > 0) {
+                    val l = ArrayList<Person>()
+                    for (i in 0 until minOf(15, ca.length())) {
+                        val o = ca.getJSONObject(i)
+                        val n = o.s("name"); if (n.isBlank()) continue
+                        l.add(Person(n, o.s("character"), o.s("profile_path").takeIf { it.isNotBlank() }?.let { IMG_S + it } ?: ""))
+                    }
+                    people = l
+                    if (cast.isBlank()) cast = l.take(5).joinToString(", ") { it.name }
                 }
+                // director / creator and writers
+                val crew = d.optJSONObject("credits")?.optJSONArray("crew")
+                if (director.isBlank()) {
+                    director = if (series) names(d.optJSONArray("created_by")).joinToString(", ")
+                    else crew?.let { cr -> (0 until cr.length()).mapNotNull { cr.optJSONObject(it) }.filter { it.s("job") == "Director" }.map { it.s("name") }.distinct().take(2).joinToString(", ") } ?: ""
+                }
+                if (crew != null) writer = (0 until crew.length()).mapNotNull { crew.optJSONObject(it) }
+                    .filter { it.s("job") in setOf("Writer", "Screenplay", "Story", "Author", "Teleplay") }
+                    .map { it.s("name") }.filter { it.isNotBlank() }.distinct().take(3).joinToString(", ")
+
+                // genres, runtime, status, country, release date
+                names(d.optJSONArray("genres"), "name", 3).takeIf { it.isNotEmpty() }?.let { genres = it.joinToString(" • ") }
+                val rt = if (series) d.optJSONArray("episode_run_time")?.optInt(0, 0) ?: 0 else d.optInt("runtime", 0)
+                if (rt > 0) runtime = fmtRun(rt)
+                status = d.s("status")
+                val pc = names(d.optJSONArray("production_countries"), "name", 4)
+                country = if (pc.isNotEmpty()) pc.joinToString(", ") else {
+                    val oc = d.optJSONArray("origin_country")
+                    if (oc != null) (0 until oc.length()).joinToString(", ") { java.util.Locale("", oc.optString(it)).getDisplayCountry(java.util.Locale.ENGLISH) } else country
+                }
+                d.s("release_date").ifEmpty { d.s("first_air_date") }.takeIf { it.isNotBlank() }?.let { release = it }
+
+                // logo (title image)
+                d.optJSONObject("images")?.optJSONArray("logos")?.let { lg ->
+                    val all = (0 until lg.length()).mapNotNull { lg.optJSONObject(it) }
+                    val best = all.firstOrNull { it.s("iso_639_1") == "en" } ?: all.firstOrNull { it.isNull("iso_639_1") || it.s("iso_639_1").isBlank() } ?: all.firstOrNull()
+                    best?.s("file_path")?.takeIf { it.isNotBlank() }?.let { logo = IMG_L + it }
+                }
+                // trailers
+                d.optJSONObject("videos")?.optJSONArray("results")?.let { vr ->
+                    val all = (0 until vr.length()).mapNotNull { vr.optJSONObject(it) }
+                        .filter { it.s("site") == "YouTube" && it.s("key").isNotBlank() && (it.s("type") == "Trailer" || it.s("type") == "Teaser") }
+                        .sortedBy { if (it.s("type") == "Trailer") 0 else 1 }
+                    for (v in all) { if (trailers.size >= 8) break; if (trailers.none { it.key == v.s("key") }) trailers.add(Trailer(v.s("name").ifBlank { "Trailer" }, v.s("key"))) }
+                }
+
                 val c2 = certOf(d, series)
                 if (c2.isNotBlank()) cert = c2
                 if (omdb.isNotBlank()) {
@@ -328,8 +412,10 @@ object Api {
             note = "TMDB: " + (e.message ?: e.javaClass.simpleName)
         }
 
+        if (people.isEmpty() && cast.isNotBlank()) people = cast.split(",").map { it.trim() }.filter { it.isNotBlank() }.take(15).map { Person(it, "", "") }
         if (overview.isBlank()) overview = "No overview available."
-        val m = Meta(backdrop.ifBlank { null }, overview, rating, year, 0, cast, director, cert, trailer, src, note)
+        val m = Meta(backdrop.ifBlank { null }, overview, rating, year, 0, cast, director, cert, trailer, src, note,
+            genres, runtime, writer, status, country, logo, release, people, trailers.toList())
         if (note.isBlank()) cache[ck] = m
         return m
     }

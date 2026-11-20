@@ -13,15 +13,12 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -101,14 +98,9 @@ fun MainScreen(
     var contentFocused by remember { mutableStateOf(false) }
     var lastBack by remember { mutableStateOf(0L) }
     var menu by remember { mutableStateOf<MenuState?>(null) }
-    val focusManager = LocalFocusManager.current
-    val topFR = remember { FocusRequester() }          // the selected Movies / Series / Live tile
-    val hold = remember { HoldState() }
-    var sideFocused by remember { mutableStateOf(false) }
 
     val tab = ui.tab
     val plName = remember(Repo.version) { Store.cur()?.name?.ifBlank { null } ?: "Playlists" }
-    val plDot = remember(Repo.version) { Store.cur()?.let { PlColor.of(it.id) } ?: Color.Gray }
     val cat = ui.cat
     val ver = Repo.version
     val hv = History.version
@@ -187,33 +179,6 @@ fun MainScreen(
         return MenuState(h.title, a)
     }
 
-    // P+ / P- (channel keys) move the whole list one page up / down. The four arrows keep moving one item.
-    fun pageKey(e: android.view.KeyEvent): Boolean {
-        val up = Remote.isPageUp(e.keyCode); val dn = Remote.isPageDown(e.keyCode)
-        if (!up && !dn) return false
-        if (e.action != android.view.KeyEvent.ACTION_DOWN) return true
-        val inGrid = contentFocused
-        if (!inGrid && !sideFocused) return true
-        val dir = if (up) FocusDirection.Up else FocusDirection.Down
-        val back = if (up) FocusDirection.Down else FocusDirection.Up
-        val n = if (inGrid) {
-            val rows = grid.layoutInfo.visibleItemsInfo.map { it.offset.y }.distinct().size
-            maxOf(1, rows - 1)
-        } else maxOf(1, side.layoutInfo.visibleItemsInfo.size - 1)
-        for (i in 0 until n) {
-            if (!focusManager.moveFocus(dir)) break
-            if ((inGrid && !contentFocused) || (!inGrid && !sideFocused)) { focusManager.moveFocus(back); break }   // never leave the list
-        }
-        return true
-    }
-    // Long press (hold) on an arrow: Up = top icons by default (Settings > Remote control).
-    fun holdAct(a: Int): Boolean = when (a) {
-        Remote.TOP -> runCatching { topFR.requestFocus() }.isSuccess
-        Remote.SEARCH -> { onSearch(); true }
-        Remote.SETTINGS -> { onSettings(); true }
-        else -> false
-    }
-
     // Back: content -> sidebar, sidebar -> (double back) exit.
     BackHandler {
         if (contentFocused) {
@@ -257,13 +222,13 @@ fun MainScreen(
         return
     }
 
-    Column(Modifier.fillMaxSize().onPreviewKeyEvent { pageKey(it.nativeKeyEvent) || holdPreview(it.nativeKeyEvent, hold) { a -> holdAct(a) } }) {
+    Column(Modifier.fillMaxSize()) {
         // ---------- Top bar: Movies | Series | Live ----------
         Row(
             Modifier.fillMaxWidth().background(Theme.sidebar).padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            MainNav(tab, topFR) { switchTab(it) }
+            MainNav(tab) { switchTab(it) }
             Spacer(Modifier.weight(1f))
             if (Repo.refreshing) Text("↻", fontSize = 16.sp)
             Chip("Search", false, Modifier, 14.dp) { onSearch() }
@@ -271,7 +236,7 @@ fun MainScreen(
         }
         Row(Modifier.weight(1f).fillMaxWidth()) {
             // ---------- Sidebar ----------
-            Column(Modifier.width(210.dp).fillMaxHeight().background(Theme.sidebar).padding(10.dp).onFocusChanged { sideFocused = it.hasFocus }) {
+            Column(Modifier.width(210.dp).fillMaxHeight().background(Theme.sidebar).padding(10.dp)) {
                 LazyColumn(Modifier.weight(1f), state = side, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     itemsIndexed(entries) { _, e ->
                         if (e.id.isEmpty()) Text(e.label, Modifier.padding(start = 6.dp, top = 8.dp, bottom = 2.dp), fontSize = 11.sp)
@@ -280,7 +245,7 @@ fun MainScreen(
                     }
                 }
                 Spacer(Modifier.height(6.dp))
-                PlChip(plName, plDot, Modifier.fillMaxWidth()) { onPlaylists() }
+                Chip("☰  " + plName, false, Modifier.fillMaxWidth(), 8.dp) { onPlaylists() }
             }
 
             // ---------- Content ----------

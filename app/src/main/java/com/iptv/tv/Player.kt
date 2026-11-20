@@ -31,7 +31,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
@@ -39,7 +38,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -138,16 +136,6 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
     val catFR = remember { FocusRequester() }
     val moveFR = remember { FocusRequester() }
     var catFocused by remember { mutableStateOf(false) }
-    var chanFocused by remember { mutableStateOf(false) }
-    val catListState = rememberLazyListState()
-    val chanListState = rememberLazyListState()
-    val focusManager = LocalFocusManager.current
-    val topFR = remember { FocusRequester() }            // selected Movies / Series / Live tile (long press Up lands here)
-    val holdSplit = remember { HoldState() }
-    val holdFull = remember { HoldState() }
-    var recentOpen by remember { mutableStateOf(false) }  // "last 10 channels" overlay
-    val prevKey = remember { arrayOfNulls<String>(2) }    // [0] channel watched before this one, [1] the one playing now
-    val plDot = remember(Repo.version) { PlColor.of(Store.pid()) }
 
     var u by remember(ci, activeChans) { mutableStateOf(0) }
     var err by remember(ci, activeChans, u) { mutableStateOf("") }
@@ -254,35 +242,6 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
     }
     fun toggle() { if (player.playWhenReady) player.pause() else player.play(); poke() }
 
-    // ---- last channel / recent channels / remote-control actions
-    fun goKey(k: String) {
-        val i = activeChans.indexOfFirst { it.fkey == k }
-        if (i >= 0) { ci = i; return }
-        val found = Recent.find(k) ?: return
-        val src = if (found.kind == "radio") "radio" else "*"
-        val l = liveChannels(src)
-        val j = l.indexOfFirst { it.fkey == k }
-        if (j < 0) return
-        activeChans = l; playCat = src; ci = j
-    }
-    /** Runs a Settings > Remote control action. Returns false when it does not apply here (so the key keeps its normal job). */
-    fun runAction(a: Int, splitMode: Boolean): Boolean = when (a) {
-        Remote.TOP -> if (splitMode) runCatching { topFR.requestFocus() }.isSuccess else false
-        Remote.LAST -> {
-            val k = prevKey[0]
-            if (k != null) goKey(k) else Toast.makeText(ctx, tr("No previous channel yet"), Toast.LENGTH_SHORT).show()
-            true
-        }
-        Remote.RECENT -> { recentOpen = true; true }
-        Remote.CH_UP -> { zap(1); true }
-        Remote.CH_DOWN -> { zap(-1); true }
-        Remote.TOGGLE -> { if (splitMode) { if (cur != null) fullScreen = true } else fullScreen = false; true }
-        Remote.FAV -> { cur?.let { Store.fav(it) }; true }
-        Remote.SEARCH -> { onSearch?.invoke(); onSearch != null }
-        Remote.SETTINGS -> { home?.onSettings?.invoke(); home != null }
-        else -> false
-    }
-
     DisposableEffect(player) {
         Hub.p = player
         val l = object : Player.Listener {
@@ -349,17 +308,6 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
         if (Store.bool("autonext", true) && ci < args.vod.size - 1) ci++ else onExit()
     }
     LaunchedEffect(cur?.id) { banner = true; delay(3500); banner = false }
-    // Previous channel (for "Last channel") right away; the recent list only takes channels watched for a few seconds, so zapping does not flood it.
-    LaunchedEffect(cur?.fkey) {
-        val k = cur?.fkey ?: return@LaunchedEffect
-        if (!isLive) return@LaunchedEffect
-        val old = prevKey[1]
-        if (old == null) prevKey[0] = Recent.keys().firstOrNull { it != k }
-        else if (old != k) prevKey[0] = old
-        prevKey[1] = k
-        delay(3000)
-        Recent.push(k)
-    }
     // Remember the last live channel (start option "Last channel") and where the live home was.
     LaunchedEffect(cur?.fkey, selectedCatId, playCat) {
         val c = cur
@@ -368,11 +316,10 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
     }
     // Keep the channel that is being moved under the D-pad cursor.
     LaunchedEffect(moveId, work) { if (moveId != null) { delay(30); runCatching { moveFR.requestFocus() } } }
-    LaunchedEffect(menu, fullScreen, controls, recentOpen) {
+    LaunchedEffect(menu, fullScreen, controls) {
         delay(80)
         runCatching {
             when {
-                recentOpen -> {}
                 menu -> menuFR.requestFocus()
                 fullScreen -> if (controls) ctlFR.requestFocus() else rootFR.requestFocus()
                 else -> activeChanFR.requestFocus()
@@ -408,38 +355,8 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
         }
     }
 
-    // Live full screen: the four arrows (and OK hold) follow Settings > Remote control. A key that also has a hold action
-    // acts when released (so a hold does not first change the channel); a key without one acts at once and keeps auto-repeating.
-    fun liveFullKey(e: KeyEvent): Boolean {
-        val k = e.keyCode
-        val isOk = k == KeyEvent.KEYCODE_DPAD_CENTER || k == KeyEvent.KEYCODE_ENTER || k == KeyEvent.KEYCODE_NUMPAD_ENTER
-        val shortSlot = Remote.slotOf(k, false)
-        if (shortSlot < 0 && !isOk) return false
-        var h = Remote.get(Remote.slotOf(k, true))
-        if (h == Remote.TOP) h = Remote.NONE   // there are no icons on a full-screen picture
-        fun shortPress() { if (isOk) menu = true else runAction(Remote.get(shortSlot), false) }
-        if (h == Remote.NONE) {
-            if (isOk) return false   // OK opens the menu in the normal path below
-            if (e.action == KeyEvent.ACTION_DOWN) shortPress()
-            return true
-        }
-        if (e.action == KeyEvent.ACTION_DOWN) {
-            if (e.repeatCount == 0) { holdFull.key = k; holdFull.fired = false }
-            else if (holdFull.key == k && !holdFull.fired) { holdFull.fired = true; runAction(h, false) }
-            return true
-        }
-        if (e.action == KeyEvent.ACTION_UP) {
-            val pending = holdFull.key == k && !holdFull.fired
-            holdFull.key = -1; holdFull.fired = false
-            if (pending) shortPress()
-        }
-        return true
-    }
-
     fun handleKey(e: KeyEvent): Boolean {
-        if (!fullScreen || menu) return false
-        if (isLive && liveFullKey(e)) return true
-        if (e.action != KeyEvent.ACTION_DOWN) return false
+        if (!fullScreen || menu || e.action != KeyEvent.ACTION_DOWN) return false
         val k = e.keyCode
         val ok = k == KeyEvent.KEYCODE_DPAD_CENTER || k == KeyEvent.KEYCODE_ENTER || k == KeyEvent.KEYCODE_NUMPAD_ENTER
         val up = k == KeyEvent.KEYCODE_DPAD_UP || k == KeyEvent.KEYCODE_CHANNEL_UP
@@ -492,32 +409,6 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
         }
     }
 
-    // Live list: P+ / P- (channel keys) move the whole list one page; a hold on an arrow runs its remote-control action.
-    fun splitKey(e: KeyEvent): Boolean {
-        if (moveId != null) return false
-        val k = e.keyCode
-        val up = Remote.isPageUp(k); val dn = Remote.isPageDown(k)
-        if (up || dn) {
-            if (e.action != KeyEvent.ACTION_DOWN) return true
-            val inChans = chanFocused
-            if (!inChans && !catFocused) return true
-            val st = if (inChans) chanListState else catListState
-            val dir = if (up) FocusDirection.Up else FocusDirection.Down
-            val back = if (up) FocusDirection.Down else FocusDirection.Up
-            val n = maxOf(1, st.layoutInfo.visibleItemsInfo.size - 1)
-            for (i in 0 until n) {
-                if (!focusManager.moveFocus(dir)) break
-                if (!(if (inChans) chanFocused else catFocused)) { focusManager.moveFocus(back); break }   // never leave the list
-            }
-            return true
-        }
-        return holdPreview(e, holdSplit) { a ->
-            val ok = runAction(a, true)
-            if (ok && a != Remote.TOP) scope.launch { delay(80); runCatching { activeChanFR.requestFocus() } }
-            ok
-        }
-    }
-
     // Back handling:
     // - Menu open -> close menu
     // - Live full-screen -> open split-screen channel browser
@@ -546,8 +437,7 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
     // never re-creates the surface (that is what froze weaker boxes).
     Box(
         Modifier.fillMaxSize().background(if (split) Theme.bg else Color.Black)
-            .then(if (!split) Modifier.focusRequester(rootFR).focusable().onKeyEvent { handleKey(it.nativeKeyEvent) }
-                  else Modifier.onPreviewKeyEvent { splitKey(it.nativeKeyEvent) })
+            .then(if (!split) Modifier.focusRequester(rootFR).focusable().onKeyEvent { handleKey(it.nativeKeyEvent) } else Modifier)
     ) {
     if (split) {
         // ==================== LIVE TV: Categories | vertical channel list | Preview + EPG ====================
@@ -563,6 +453,8 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
         val displayedChans = remember(selectedCatId, Repo.version, Store.favs.size, sortTick) { liveChannels(selectedCatId) }
         val shown = if (moveId != null) work else displayedChans
         val plName = remember(Repo.version) { Store.cur()?.name?.ifBlank { null } ?: "Playlists" }
+        val catListState = rememberLazyListState()
+        val chanListState = rememberLazyListState()
 
         fun playFrom(idx: Int, ch: Item) {
             if (ch.fkey == cur?.fkey) { if (cur != null) fullScreen = true }
@@ -583,7 +475,7 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
         }
         // Make sure the D-pad always has somewhere to land: the playing channel if it is on screen, else the category list.
         LaunchedEffect(Unit) {
-            delay(120)
+            delay(250)
             if (runCatching { activeChanFR.requestFocus() }.isFailure) runCatching { catFR.requestFocus() }
         }
 
@@ -595,9 +487,9 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 if (home != null) {
-                    MainNav(2, topFR) { i -> if (i != 2) home.onTab(i) }
+                    MainNav(2) { i -> if (i != 2) home.onTab(i) }
                 } else Text("Live TV", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Theme.accent)
-                PlDot(plDot, 11.dp)
+                Text("•", fontSize = 14.sp, color = Color.Gray)
                 Text(cur?.name ?: "", Modifier.weight(1f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (home != null) Chip(if (Vpn.up != null) "VPN ●" else "Settings", false, Modifier, 10.dp) { home.onSettings() }
                 if (showClock) Text(clockFmt.format(Date(clock)), fontSize = 14.sp, fontWeight = FontWeight.Bold)
@@ -627,7 +519,7 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
                     }
                     if (home != null) {
                         Spacer(Modifier.height(6.dp))
-                        PlChip(plName, plDot, Modifier.fillMaxWidth()) { home.onPlaylists() }
+                        Chip("☰  $plName", false, Modifier.fillMaxWidth(), 8.dp) { home.onPlaylists() }
                     }
                 }
 
@@ -635,7 +527,6 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
                 LazyColumn(
                     state = chanListState,
                     modifier = Modifier.weight(1f).fillMaxHeight().padding(8.dp)
-                        .onFocusChanged { chanFocused = it.hasFocus }
                         .onPreviewKeyEvent { e ->
                             val mv = moveId
                             if (mv == null) false
@@ -697,8 +588,6 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
                                     val rf = if (playingThis) vfps else FpsMemory.get(ch.fkey).takeIf { it > 0 } ?: StreamInfo.nameFps(ch.name)
                                     if (rq != null || rf > 0) { Spacer(Modifier.width(6.dp)); StreamBadge(rq, rf) }
                                 }
-                                Spacer(Modifier.width(8.dp))
-                                PlDot(plDot, 9.dp)
                                 if (playingThis) Text("  ▶", fontSize = 11.sp)
                                 if (isFav) Text("  ★", fontSize = 13.sp, color = Color(0xFFFFC107))
                             }
@@ -858,8 +747,7 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
             epg.forEach { Text(it, fontSize = 12.sp, maxLines = 1) }
             Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!isLive) Chip(if (playing) "⏸  Pause" else "▶  Play", true, Modifier.focusRequester(menuFR)) { toggle(); menu = false }
-                if (isLive) Chip("Channels", true, Modifier.focusRequester(menuFR)) { menu = false; recentOpen = true }
-                if (isLive) Chip("All channels", false) { menu = false; fullScreen = false }
+                if (isLive) Chip("Channels", true, Modifier.focusRequester(menuFR)) { menu = false; fullScreen = false }
                 Chip("Aspect: " + listOf("Fit", "Fill", "Zoom")[fit], false, if (isLive) Modifier else Modifier) {
                     fit = (fit + 1) % 3; Store.put("aspect", fit)
                 }
@@ -871,10 +759,6 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
                 if (isLive && cur != null) Chip(if (Store.favs.contains(cur.fkey)) "★ Unfavorite" else "☆ Favorite", false) { Store.fav(cur) }
             }
         }
-    }
-    if (recentOpen) {
-        val recents = remember { Recent.items() }
-        RecentDialog(recents, cur?.fkey, onPick = { goKey(it.fkey) }, onAll = { fullScreen = false }, onDismiss = { recentOpen = false })
     }
     }
 }

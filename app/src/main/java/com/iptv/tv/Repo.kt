@@ -20,7 +20,19 @@ object Repo {
     var error by mutableStateOf("")
     var refreshing by mutableStateOf(false)
     var version by mutableStateOf(0)
-    private var cacheTs = 0L   // when the library currently on screen was fetched
+    /** When the library currently on screen was fetched (shown in Settings). */
+    var cacheTs by mutableStateOf(0L)
+        private set
+
+    /** Auto refresh setting: 0 off, 1 every 4 hours, 2 every 12 hours (default), 3 daily. Returns the interval in ms, 0 = off. */
+    fun autoIntervalMs(): Long = when (Store.int("autoref", 2)) {
+        1 -> 4 * 3600_000L
+        2 -> 12 * 3600_000L
+        3 -> 24 * 3600_000L
+        else -> 0L
+    }
+    /** True when auto refresh is on and the library is older than the chosen interval. */
+    fun stale(): Boolean { val iv = autoIntervalMs(); return iv > 0L && System.currentTimeMillis() - cacheTs >= iv }
 
     private val names = listOf("get_live_categories", "get_live_streams", "get_vod_categories", "get_vod_streams",
         "get_series_categories", "get_series")
@@ -100,13 +112,14 @@ object Repo {
     /** Shows the saved library immediately (no network) so the app opens straight into it. */
     suspend fun showCached() { if (!ready) loadCache() }
 
-    /** force = true always hits the network. Otherwise cached data is used and refreshed only when older than 6 hours. */
+    /** force = true always hits the network. Otherwise cached data is used and refreshed only when older than the auto refresh interval (Settings). */
     suspend fun load(force: Boolean = false) {
         val pid = Store.pid()
         error = ""
         if (!ready) loadCache()
         val shown = ready   // the saved library is already on screen: apply the refreshed data once, at the end
-        val fresh = shown && System.currentTimeMillis() - cacheTs < 6 * 3600_000L
+        val iv = autoIntervalMs()   // 0 = auto refresh off: a saved library is kept until the user refreshes by hand
+        val fresh = shown && (iv == 0L || System.currentTimeMillis() - cacheTs < iv)
         if (fresh && !force) return
         refreshing = true
         try {

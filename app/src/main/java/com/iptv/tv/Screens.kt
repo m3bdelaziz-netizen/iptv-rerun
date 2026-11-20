@@ -1,7 +1,10 @@
 @file:OptIn(ExperimentalTvMaterial3Api::class)
 package com.iptv.tv
 
+import android.Manifest
 import android.app.Activity
+import android.content.pm.PackageManager
+import android.os.Build
 import android.net.VpnService
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -51,8 +54,9 @@ private fun Group(t: String) {
 }
 
 @Composable
-fun SettingsScreen(goVpn: () -> Unit, goPl: () -> Unit, goPhone: () -> Unit, goCats: () -> Unit, refresh: () -> Unit, onRestored: () -> Unit) {
+fun SettingsScreen(goVpn: () -> Unit, goPl: () -> Unit, goPhone: () -> Unit, goCats: () -> Unit, refresh: ((Boolean) -> Unit) -> Unit, onRestored: () -> Unit) {
     val ctx = LocalContext.current
+    val scope = rememberCoroutineScope()
     var tick by remember { mutableStateOf(0) }
     var tmdb by remember { mutableStateOf(Store.str("tmdb", "")) }
     var omdb by remember { mutableStateOf(Store.str("omdb", "")) }
@@ -62,32 +66,40 @@ fun SettingsScreen(goVpn: () -> Unit, goPl: () -> Unit, goPhone: () -> Unit, goC
     var crash by remember { mutableStateOf(runCatching { java.io.File(Store.dir, "crash.log").takeIf { it.exists() }?.readText()?.take(900) }.getOrNull()) }
     @Suppress("UNUSED_VARIABLE") val t = tick
 
-    // Backup / restore through the system file picker (any folder: internal storage, USB...). Falls back to the app's own folder when the TV has no file manager.
-    val backupPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-        if (uri != null) msg = runCatching {
-            ctx.contentResolver.openOutputStream(uri)!!.use { it.write(Backup.export().toByteArray()) }
-            "Backup saved"
-        }.getOrElse { "Backup failed: ${it.message}" }
+    // Backup: written straight to Downloads/Waleen (+ the app folder). No system file picker, so it works on TVs without a file manager.
+    var restoreList by remember { mutableStateOf<List<Backups.Found>?>(null) }
+    var cacheText by remember { mutableStateOf("") }
+    LaunchedEffect(tick) { cacheText = withContext(Dispatchers.IO) { CacheTools.human(CacheTools.bytes(ctx)) } }
+
+    fun backupNow() { scope.launch { msg = withContext(Dispatchers.IO) { Backups.save(ctx) } } }
+    val storagePerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { backupNow() }
+    fun doBackup() {
+        if (Build.VERSION.SDK_INT in 23..28 && ctx.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED)
+            runCatching { storagePerm.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE) }.onFailure { backupNow() }
+        else backupNow()
+    }
+    fun applyRestore(txt: String?) {
+        val err = if (txt == null) "Cannot read file" else Backup.restore(txt)
+        if (err == null) { msg = "Restored"; onRestored() } else msg = err
     }
     val restorePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            val txt = runCatching { ctx.contentResolver.openInputStream(uri)!!.bufferedReader().readText() }.getOrNull()
-            val err = if (txt == null) "Cannot read file" else Backup.restore(txt)
-            if (err == null) { msg = "Restored"; onRestored() } else msg = err
-        }
+        if (uri != null) scope.launch { applyRestore(withContext(Dispatchers.IO) { Backups.readUri(ctx, uri) }) }
     }
-    fun doBackup() {
-        val name = "iptv-tv-backup-" + java.text.SimpleDateFormat("yyyyMMdd-HHmm", java.util.Locale.US).format(java.util.Date()) + ".json"
-        runCatching { backupPicker.launch(name) }.onFailure {
-            val f = Backup.fallbackFile(ctx)
-            msg = runCatching { f.writeText(Backup.export()); "No file manager found. Saved to: ${f.absolutePath}" }.getOrElse { "Backup failed: ${it.message}" }
-        }
+    fun doRestore() { scope.launch { restoreList = withContext(Dispatchers.IO) { Backups.list(ctx) } } }
+
+    val lastFmt = remember { java.text.SimpleDateFormat("dd/MM HH:mm", java.util.Locale.US) }
+    fun doRefresh() {
+        if (Repo.refreshing) { msg = "Already refreshing..."; return }
+        msg = "Refreshing playlist..."
+        refresh { ok -> msg = if (ok) "Playlist refreshed" else "Refresh failed. Check your connection." }
     }
-    fun doRestore() {
-        runCatching { restorePicker.launch(arrayOf("*/*")) }.onFailure {
-            val f = Backup.fallbackFile(ctx)
-            val err = if (f.exists()) Backup.restore(f.readText()) else "No file manager found and no backup in the app folder"
-            if (err == null) { msg = "Restored"; onRestored() } else msg = err
+    fun doClearCache() {
+        scope.launch {
+            withContext(Dispatchers.IO) { CacheTools.clear(ctx) }
+            tick++
+            if (Repo.refreshing) { msg = "Cache cleared"; return@launch }
+            msg = "Cache cleared. Reloading library..."
+            refresh { ok -> msg = if (ok) "Cache cleared and library reloaded" else "Cache cleared. Reload failed: use Refresh playlist now" }
         }
     }
 
@@ -143,19 +155,24 @@ fun SettingsScreen(goVpn: () -> Unit, goPl: () -> Unit, goPhone: () -> Unit, goC
         Opt("Subtitle language", track(Store.str("slang", ""))) { cycStr("slang", "", "ar", "en") }
         Opt("Subtitle size", pick("ssize", 1, "Small", "Normal", "Large", "Huge")) { cyc("ssize", 4, 1) }
 
-        Group("Backup")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Chip("Backup to internal storage", true) { doBackup() }
-            Chip("Restore from backup", false) { doRestore() }
-        }
-        Text("Saves playlists, favorites, history, settings, VPN profiles and channel order in one file. The file contains your logins: keep it private.", fontSize = 11.sp, color = Theme.muted)
-
         Group("Library")
+        Opt("Refresh playlist now", if (Repo.refreshing) "Refreshing..." else if (Repo.cacheTs > 0L) "Last: " + lastFmt.format(java.util.Date(Repo.cacheTs)) else "") { doRefresh() }
+        Opt("Auto refresh", pick("autoref", 2, "Off", "Every 4 hours", "Every 12 hours", "Every 24 hours")) { cyc("autoref", 4, 2) }
+        Opt("Clear cache", cacheText) { doClearCache() }
+        Text("Clear cache removes posters and temporary files, then reloads the lists. Playlists, favorites and settings are kept.", fontSize = 11.sp, color = Theme.muted)
         Chip("Choose categories", true) { goCats() }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Chip("Playlists", false) { goPl() }
             Chip("VPN profiles", false) { goVpn() }
         }
+
+        Group("Backup")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Chip("Backup to internal storage", true) { doBackup() }
+            Chip("Restore from backup", false) { doRestore() }
+        }
+        Text("Saved to Downloads/Waleen (no file manager needed). Contains playlists, favorites, history, settings, VPN profiles and channel order. The file contains your logins: keep it private.", fontSize = 11.sp, color = Theme.muted)
+
         Group("EPG (optional)")
         Text("Add as many XMLTV guide links as you like (.xml or .xml.gz). Leave empty to use the provider's guide.", fontSize = 11.sp, color = Theme.muted)
         epgList.forEach { u ->
@@ -171,10 +188,7 @@ fun SettingsScreen(goVpn: () -> Unit, goPl: () -> Unit, goPhone: () -> Unit, goC
         }
         Field("TMDB API key v3 (rating + age rating)", tmdb) { tmdb = it }
         Field("OMDb API key (exact IMDb rating, optional)", omdb) { omdb = it }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Chip("Save keys", true) { Store.put("tmdb", tmdb.trim()); Store.put("omdb", omdb.trim()); Api.c = Api.c.copy(tmdb = tmdb.trim()); msg = "Saved" }
-            Chip("Refresh library", false) { refresh() }
-        }
+        Chip("Save keys", true) { Store.put("tmdb", tmdb.trim()); Store.put("omdb", omdb.trim()); Api.c = Api.c.copy(tmdb = tmdb.trim()); msg = "Saved" }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Chip("Clear favorites", false) { Store.clearFavs(); msg = "Saved" }
             Chip("Clear continue watching", false) { History.clear(); msg = "Saved" }
@@ -185,6 +199,18 @@ fun SettingsScreen(goVpn: () -> Unit, goPl: () -> Unit, goPhone: () -> Unit, goC
             Text(c, fontSize = 10.sp, color = Color.White)
             Chip("Clear crash log", false) { runCatching { java.io.File(Store.dir, "crash.log").delete() }; crash = null }
         }
+    }
+
+    restoreList?.let { found ->
+        val fmt = java.text.SimpleDateFormat("dd/MM/yyyy HH:mm", java.util.Locale.US)
+        val acts = found.take(12).map { f ->
+            MenuAction(fmt.format(java.util.Date(f.time)) + "  -  " + CacheTools.human(f.size) + "  -  " + f.place) {
+                scope.launch { applyRestore(withContext(Dispatchers.IO) { f.read() }) }
+            }
+        } + MenuAction("Browse files...") {
+            runCatching { restorePicker.launch(arrayOf("*/*")) }.onFailure { msg = "No file manager on this TV" }
+        }
+        OptionsDialog(if (found.isEmpty()) "No backup found. Make a backup first." else "Choose a backup to restore", acts, 480.dp, "", false) { restoreList = null }
     }
 }
 

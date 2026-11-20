@@ -101,12 +101,23 @@ private val AR = mapOf(
     "Backup" to "النسخ الاحتياطي", "Backup to internal storage" to "نسخ احتياطي إلى الذاكرة الداخلية",
     "Restore from backup" to "استعادة من نسخة احتياطية", "Backup saved" to "تم حفظ النسخة الاحتياطية", "Restored" to "تمت الاستعادة",
     "Not a valid backup file" to "ملف نسخة احتياطية غير صالح",
+    "Refresh playlist now" to "تحديث القائمة الآن", "Auto refresh" to "التحديث التلقائي",
+    "Every 4 hours" to "كل 4 ساعات", "Every 12 hours" to "كل 12 ساعة", "Every 24 hours" to "كل 24 ساعة (يوميًا)",
+    "Refreshing..." to "جارٍ التحديث...", "Refreshing playlist..." to "جارٍ تحديث القائمة...", "Already refreshing..." to "التحديث جارٍ بالفعل...",
+    "Playlist refreshed" to "تم تحديث القائمة", "Refresh failed. Check your connection." to "فشل التحديث. تحقق من الاتصال.",
+    "Clear cache" to "مسح الذاكرة المؤقتة", "Cache cleared" to "تم مسح الذاكرة المؤقتة",
+    "Cache cleared. Reloading library..." to "تم مسح الذاكرة المؤقتة. جارٍ إعادة تحميل المكتبة...",
+    "Cache cleared and library reloaded" to "تم مسح الذاكرة المؤقتة وإعادة تحميل المكتبة",
+    "Cache cleared. Reload failed: use Refresh playlist now" to "تم مسح الذاكرة المؤقتة. فشل التحميل: استخدم تحديث القائمة الآن",
+    "Choose a backup to restore" to "اختر نسخة احتياطية للاستعادة", "No backup found. Make a backup first." to "لا توجد نسخة احتياطية. أنشئ نسخة أولًا.",
+    "Browse files..." to "تصفح الملفات...", "No file manager on this TV" to "لا يوجد مدير ملفات على هذا التلفاز", "Cannot read file" to "تعذر قراءة الملف",
     "Ocean" to "المحيط", "Forest" to "الغابة", "Crimson" to "قرمزي", "Royal" to "ملكي", "Mocha" to "موكا", "Slate" to "أردوازي", "Sunset" to "الغروب", "Teal Noir" to "فيروزي داكن"
 )
 private val PRE = listOf(
     "Season " to "الموسم ", "Error: " to "خطأ: ", "Playback error: " to "خطأ في التشغيل: ", "Login failed: " to "فشل تسجيل الدخول: ",
     "Failed: " to "فشل: ", "Remove \"" to "حذف \"", "Connected: " to "متصل: ", "Stream format: " to "صيغة البث: ", "Added '" to "تمت إضافة '",
-    "▶  Resume " to "▶  استكمال ", "▶  Continue " to "▶  متابعة ", "Aspect: " to "الأبعاد: ", "Audio: " to "الصوت: ", "Subtitles: " to "الترجمة: ", "Speed: " to "السرعة: "
+    "▶  Resume " to "▶  استكمال ", "▶  Continue " to "▶  متابعة ", "Aspect: " to "الأبعاد: ", "Audio: " to "الصوت: ", "Subtitles: " to "الترجمة: ", "Speed: " to "السرعة: ",
+    "Backup saved: " to "تم حفظ النسخة الاحتياطية: ", "Backup failed: " to "فشل النسخ الاحتياطي: ", "Last: " to "آخر تحديث: "
 )
 
 fun tr(s: String): String {

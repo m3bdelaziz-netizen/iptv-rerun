@@ -119,6 +119,7 @@ object Api {
     var c = Creds("", "", "", "")
     private val cache: MutableMap<String, Meta> = java.util.Collections.synchronizedMap(HashMap<String, Meta>())
 
+    fun clearMeta() { cache.clear() }
     fun normUrl(server: String): String { val s = server.trim().trimEnd('/'); return if (s.startsWith("http", true)) s else "http://$s" }
     fun base(): String = normUrl(c.server)
 

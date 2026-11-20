@@ -222,57 +222,61 @@ fun MainScreen(
         return
     }
 
-    Row(Modifier.fillMaxSize()) {
-        // ---------- Sidebar ----------
-        Column(Modifier.width(210.dp).fillMaxHeight().background(Theme.sidebar).padding(10.dp)) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                listOf("Movies", "Series", "Live").forEachIndexed { i, n ->
-                    TabPill(n, tab == i, Modifier.weight(1f)) { switchTab(i) }
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            LazyColumn(Modifier.weight(1f), state = side, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                itemsIndexed(entries) { _, e ->
-                    if (e.id.isEmpty()) Text(e.label, Modifier.padding(start = 6.dp, top = 8.dp, bottom = 2.dp), fontSize = 11.sp)
-                    else if (e.id == "fav") FavItem("Favorites", null, e.id == cat, if (e.id == cat) Modifier.focusRequester(selFR) else Modifier) { switchCat(e.id) }
-                    else SideItem(e.label, e.id == cat, if (e.id == cat) Modifier.focusRequester(selFR) else Modifier) { switchCat(e.id) }
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-            Chip("☰  " + plName, false, Modifier.fillMaxWidth(), 8.dp) { onPlaylists() }
+    Column(Modifier.fillMaxSize()) {
+        // ---------- Top bar: Movies | Series | Live ----------
+        Row(
+            Modifier.fillMaxWidth().background(Theme.sidebar).padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            MainNav(tab) { switchTab(it) }
+            Spacer(Modifier.weight(1f))
+            if (Repo.refreshing) Text("↻", fontSize = 16.sp)
+            Chip("Search", false, Modifier, 14.dp) { onSearch() }
+            Chip(if (Vpn.up != null) "VPN ●" else "Settings", false, Modifier, 14.dp) { onSettings() }
         }
-
-        // ---------- Content ----------
-        Column(Modifier.weight(1f).fillMaxHeight().onFocusChanged { contentFocused = it.hasFocus }) {
-            Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 2.dp),
-                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(title, Modifier.weight(1f), fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (Repo.refreshing) Text("↻", fontSize = 14.sp)
-                Chip("Search", false, Modifier, 10.dp) { onSearch() }
-                Chip(if (Vpn.up != null) "VPN ●" else "Settings", false, Modifier, 10.dp) { onSettings() }
-            }
-            if (cells.isEmpty()) {
-                Box(Modifier.weight(1f).fillMaxWidth(), Alignment.Center) {
-                    Text(if (cat == "cw") "Nothing watched yet" else if (cat == "fav") "No favorites yet (hold OK on an item)" else "Nothing here")
+        Row(Modifier.weight(1f).fillMaxWidth()) {
+            // ---------- Sidebar ----------
+            Column(Modifier.width(210.dp).fillMaxHeight().background(Theme.sidebar).padding(10.dp)) {
+                LazyColumn(Modifier.weight(1f), state = side, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    itemsIndexed(entries) { _, e ->
+                        if (e.id.isEmpty()) Text(e.label, Modifier.padding(start = 6.dp, top = 8.dp, bottom = 2.dp), fontSize = 11.sp)
+                        else if (e.id == "fav") FavItem("Favorites", null, e.id == cat, if (e.id == cat) Modifier.focusRequester(selFR) else Modifier) { switchCat(e.id) }
+                        else SideItem(e.label, e.id == cat, if (e.id == cat) Modifier.focusRequester(selFR) else Modifier) { switchCat(e.id) }
+                    }
                 }
-            } else {
-                LazyVerticalGrid(
-                    GridCells.Adaptive(cardMin.dp), Modifier.weight(1f), state = grid,
-                    contentPadding = PaddingValues(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    itemsIndexed(cells) { i, c ->
-                        val mod = Modifier
-                            .onFocusChanged { if (it.hasFocus) ui.lastIdx = i }
-                            .then(if (i == restoreIdx) Modifier.focusRequester(restoreFR) else Modifier)
-                        val h = c.hist
-                        val m = c.item
-                        if (h != null) {
-                            PosterCard(h.title, if (h.dur > 0L) "${fmtTime(h.pos)} / ${fmtTime(h.dur)}" else "Next episode", h.img, false, h.progress, showLabel, "", mod, { onResume(h) }, { menu = cwMenu(h) })
-                        } else if (m != null) {
-                            val fav = Store.favs.contains(m.fkey)
-                            val rTag = if (Store.bool("rating", true) && m.rating.isNotBlank() && m.rating != "0") "★ ${m.rating}" else ""
-                            PosterCard(m.name, subOf(m), m.img, fav, 0f, showLabel, rTag, mod, { onOpen(m) }, { menu = itemMenu(m, i) })
+                Spacer(Modifier.height(6.dp))
+                Chip("☰  " + plName, false, Modifier.fillMaxWidth(), 8.dp) { onPlaylists() }
+            }
+
+            // ---------- Content ----------
+            Column(Modifier.weight(1f).fillMaxHeight().onFocusChanged { contentFocused = it.hasFocus }) {
+                Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(title, Modifier.weight(1f), fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                if (cells.isEmpty()) {
+                    Box(Modifier.weight(1f).fillMaxWidth(), Alignment.Center) {
+                        Text(if (cat == "cw") "Nothing watched yet" else if (cat == "fav") "No favorites yet (hold OK on an item)" else "Nothing here")
+                    }
+                } else {
+                    LazyVerticalGrid(
+                        GridCells.Adaptive(cardMin.dp), Modifier.weight(1f), state = grid,
+                        contentPadding = PaddingValues(16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        itemsIndexed(cells) { i, c ->
+                            val mod = Modifier
+                                .onFocusChanged { if (it.hasFocus) ui.lastIdx = i }
+                                .then(if (i == restoreIdx) Modifier.focusRequester(restoreFR) else Modifier)
+                            val h = c.hist
+                            val m = c.item
+                            if (h != null) {
+                                PosterCard(h.title, if (h.dur > 0L) "${fmtTime(h.pos)} / ${fmtTime(h.dur)}" else "Next episode", h.img, false, h.progress, showLabel, "", mod, { onResume(h) }, { menu = cwMenu(h) })
+                            } else if (m != null) {
+                                val fav = Store.favs.contains(m.fkey)
+                                val rTag = if (Store.bool("rating", true) && m.rating.isNotBlank() && m.rating != "0") "★ ${m.rating}" else ""
+                                PosterCard(m.name, subOf(m), m.img, fav, 0f, showLabel, rTag, mod, { onOpen(m) }, { menu = itemMenu(m, i) })
+                            }
                         }
                     }
                 }

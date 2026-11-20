@@ -26,6 +26,8 @@ object Epg {
         return add.size
     }
     fun remove(u: String) = save(urls().filter { it != u })
+    /** Drops the guide held in memory; it is downloaded again when needed. */
+    fun clearCache() { data = null }
 
     private fun norm(s: String) = s.lowercase().replace(Regex("[^\\p{L}\\p{N}]"), "")
 

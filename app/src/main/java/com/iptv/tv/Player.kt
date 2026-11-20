@@ -154,6 +154,9 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
     var epg by remember(ci, activeChans) { mutableStateOf(listOf<String>()) }
     var banner by remember(ci, activeChans) { mutableStateOf(true) }
     var speedIdx by remember { mutableStateOf(1) }
+    var vh by remember { mutableStateOf(0) }       // real video height (for the quality badge)
+    var vfps by remember { mutableStateOf(0) }     // real frame rate (25 / 50 ...)
+    val probeGen = remember { IntArray(1) }
     var controls by remember { mutableStateOf(false) }   // VOD button bar has the focus
     var playing by remember { mutableStateOf(true) }     // play/pause icon
 
@@ -166,6 +169,7 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
     val cur: Item? = if (isLive) activeChans.getOrNull(ci) else null
     val media: Media? = if (!isLive) args.vod.getOrNull(ci) else null
     val title = cur?.name ?: media?.title ?: ""
+    val badgeQ: String? = StreamInfo.qualityOfHeight(vh) ?: cur?.name?.let { streamQuality(it) }
     val seekStep = remember { if (Store.int("seek", 0) == 0) 10_000L else 30_000L }
     val subMult = remember { when (Store.int("ssize", 1)) { 0 -> 0.8f; 2 -> 1.3f; 3 -> 1.6f; else -> 1f } }
     val showClock = remember { Store.bool("clock", true) }
@@ -243,6 +247,7 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
         val l = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) { perr = error }
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) { playing = playWhenReady }
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) { vh = maxOf(videoSize.height, videoSize.width * 9 / 16) }   // wide films are letterboxed: judge by width too
             override fun onPlaybackStateChanged(state: Int) {
                 buffering = state == Player.STATE_BUFFERING
                 if (state == Player.STATE_ENDED) ended++
@@ -264,6 +269,14 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
             loaded[0] = m; url = m.url
         }
         player.setMediaItem(MediaItem.fromUri(url)); player.prepare(); player.playWhenReady = true
+        // Real quality + frame rate of what is playing (shown as badges). Starts from what was measured last time for this channel.
+        FpsMemory.sync()
+        val pk = cur?.fkey
+        val gen = ++probeGen[0]
+        vh = 0; vfps = if (pk != null) FpsMemory.get(pk) else 0
+        player.setVideoFrameMetadataListener(FpsProbe { f ->
+            if (gen == probeGen[0] && f > 0) { vfps = f; if (pk != null) FpsMemory.put(pk, f) }
+        })
         val m = media
         if (!isLive && m != null && Store.bool("resume", true)) {
             val h = History.get(m.key)
@@ -474,9 +487,7 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 if (home != null) {
-                    TabPill("Movies", false) { home.onTab(0) }
-                    TabPill("Series", false) { home.onTab(1) }
-                    TabPill("Live", true) { }
+                    MainNav(2) { i -> if (i != 2) home.onTab(i) }
                 } else Text("Live TV", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Theme.accent)
                 Text("•", fontSize = 14.sp, color = Color.Gray)
                 Text(cur?.name ?: "", Modifier.weight(1f), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -572,11 +583,10 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
                                 Text(ch.name, Modifier.weight(1f), fontSize = 13.sp,
                                     fontWeight = if (playingThis || grabbed) FontWeight.Bold else FontWeight.Normal,
                                     maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                streamQuality(ch.name)?.let { q ->
-                                    Spacer(Modifier.width(6.dp))
-                                    Box(Modifier.background(Color(0x66000000), RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 1.dp)) {
-                                        Text(q, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFC107), maxLines = 1)
-                                    }
+                                run {
+                                    val rq = if (playingThis) badgeQ else streamQuality(ch.name)
+                                    val rf = if (playingThis) vfps else FpsMemory.get(ch.fkey).takeIf { it > 0 } ?: StreamInfo.nameFps(ch.name)
+                                    if (rq != null || rf > 0) { Spacer(Modifier.width(6.dp)); StreamBadge(rq, rf) }
                                 }
                                 if (playingThis) Text("  ▶", fontSize = 11.sp)
                                 if (isFav) Text("  ★", fontSize = 13.sp, color = Color(0xFFFFC107))
@@ -605,6 +615,7 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
 
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(cur?.name ?: "", fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        StreamBadge(badgeQ, vfps, big = true)
                         if (moveId != null) {
                             Text("Moving: press Up / Down, then OK to drop. Back cancels.", fontSize = 12.sp, color = Theme.accent)
                         } else if (epg.isEmpty()) {
@@ -668,7 +679,10 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
 
         if (buffering && err.isBlank()) Text("Loading...", Modifier.align(Alignment.Center), fontSize = 14.sp)
         if (err.isNotBlank()) Text("Playback error: $err", Modifier.align(Alignment.Center), fontSize = 16.sp)
-        if (isLive && banner && !menu) Text(chLabel(cur, ci, title), Modifier.align(Alignment.TopStart).padding(24.dp), fontSize = 20.sp)
+        if (isLive && banner && !menu) Row(Modifier.align(Alignment.TopStart).padding(24.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(chLabel(cur, ci, title), fontSize = 20.sp)
+            StreamBadge(badgeQ, vfps, big = true)
+        }
         val gd = guide
         if (guideShow && gd != null && !menu) Column(
             Modifier.align(Alignment.TopStart).padding(start = 24.dp, top = 20.dp)
@@ -692,7 +706,10 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
                     .padding(horizontal = 32.dp, vertical = 20.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(title, Modifier.weight(1f, false), fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    StreamBadge(badgeQ, vfps, big = true)
+                }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(fmtTime(pos), fontSize = 12.sp)
                     Box(Modifier.weight(1f).height(6.dp).clip(RoundedCornerShape(3.dp)).background(Color(0x55FFFFFF))) {
@@ -723,7 +740,10 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
             Modifier.align(Alignment.TopStart).fillMaxWidth()
                 .background(Brush.verticalGradient(listOf(Color(0xDD000000), Color.Transparent))).padding(24.dp)
         ) {
-            Text(if (isLive) chLabel(cur, ci, title) else title, fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(if (isLive) chLabel(cur, ci, title) else title, Modifier.weight(1f, false), fontSize = 18.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                StreamBadge(badgeQ, vfps, big = true)
+            }
             epg.forEach { Text(it, fontSize = 12.sp, maxLines = 1) }
             Row(Modifier.padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!isLive) Chip(if (playing) "⏸  Pause" else "▶  Play", true, Modifier.focusRequester(menuFR)) { toggle(); menu = false }

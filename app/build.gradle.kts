@@ -2,7 +2,7 @@ plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 android {
     namespace = "com.iptv.tv"
     compileSdk = 34
-    defaultConfig { applicationId = "com.iptv.tv"; minSdk = 23; targetSdk = 34; versionCode = 8; versionName = "1.8" }
+    defaultConfig { applicationId = "com.iptv.tv"; minSdk = 23; targetSdk = 34; versionCode = 10; versionName = "1.10" }
     buildFeatures { compose = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17; isCoreLibraryDesugaringEnabled = true }

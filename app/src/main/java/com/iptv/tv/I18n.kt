@@ -118,7 +118,11 @@ private val AR = mapOf(
     "Right (hold down)" to "يمين (ضغط مطول)", "Up" to "أعلى", "Up (hold down)" to "أعلى (ضغط مطول)", "Down" to "أسفل",
     "Down (hold down)" to "أسفل (ضغط مطول)", "No previous channel yet" to "لا توجد قناة سابقة بعد",
     "No recent channels yet" to "لا توجد قنوات أخيرة بعد", "☰  All channels" to "☰  كل القنوات", "Color" to "اللون",
-    "Ocean" to "المحيط", "Forest" to "الغابة", "Crimson" to "قرمزي", "Royal" to "ملكي", "Mocha" to "موكا", "Slate" to "أردوازي", "Sunset" to "الغروب", "Teal Noir" to "فيروزي داكن"
+    "Ocean" to "المحيط", "Forest" to "الغابة", "Crimson" to "قرمزي", "Royal" to "ملكي", "Mocha" to "موكا", "Slate" to "أردوازي", "Sunset" to "الغروب", "Teal Noir" to "فيروزي داكن",
+    "Favorite" to "المفضلة", "Favorited" to "في المفضلة", "Restart" to "من البداية",
+    "Cast" to "طاقم التمثيل", "Movie Details" to "تفاصيل الفيلم", "Series Details" to "تفاصيل المسلسل",
+    "Status" to "الحالة", "Release Info" to "تاريخ الإصدار", "Runtime" to "المدة", "Certification" to "التصنيف العمري", "Origin Country" to "بلد الإنتاج",
+    "Director:" to "المخرج:", "Creator:" to "المؤلف:", "Writer:" to "الكاتب:", "Show More ▾" to "عرض المزيد ▾", "Show Less ▴" to "عرض أقل ▴", "Similar" to "مشابه", "Awards:" to "الجوائز:"
 )
 private val PRE = listOf(
     "Season " to "الموسم ", "Error: " to "خطأ: ", "Playback error: " to "خطأ في التشغيل: ", "Login failed: " to "فشل تسجيل الدخول: ",

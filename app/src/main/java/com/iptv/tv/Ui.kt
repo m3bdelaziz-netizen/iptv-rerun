@@ -208,7 +208,7 @@ fun App() {
             Route.Phone -> PhoneSetupScreen(onPlaylistAdded = reload)
             Route.Cats -> CategoryPickerScreen(onSaved = { ui.cat = "*"; ui.lastIdx = 0; scope.launch { Repo.reapply() }; pop() })
             Route.Vpn -> VpnScreen()
-            is Route.Detail -> DetailScreen(r.item, play = { push(Route.Play(it)) })
+            is Route.Detail -> DetailScreen(r.item, play = { push(Route.Play(it)) }, open = { push(Route.Detail(it)) })
             is Route.Play -> PlayerScreen(r.args, onExit = pop, onSearch = { push(Route.Search) })
         }
     }
@@ -295,11 +295,11 @@ fun SideItem(t: String, sel: Boolean, w: Modifier = Modifier, f: () -> Unit) {
 
 /** Image decoded at a small fixed size: much lighter on memory/CPU than loading full posters. */
 @Composable
-fun Img(url: String, mod: Modifier, scale: ContentScale = ContentScale.Crop, w: Int = 300, h: Int = 450) {
+fun Img(url: String, mod: Modifier, scale: ContentScale = ContentScale.Crop, w: Int = 300, h: Int = 450, align: Alignment = Alignment.Center) {
     if (url.isBlank()) return
     val ctx = LocalContext.current
     val req = remember(url, w, h) { ImageRequest.Builder(ctx).data(url).size(w, h).crossfade(false).build() }
-    AsyncImage(model = req, contentDescription = null, modifier = mod, contentScale = scale)
+    AsyncImage(model = req, contentDescription = null, modifier = mod, contentScale = scale, alignment = align)
 }
 
 @Composable

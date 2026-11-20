@@ -24,9 +24,17 @@ data class Item(val id: String, val name: String, val img: String, val kind: Str
     val year: String by lazy(LazyThreadSafetyMode.NONE) { Regex("(19|20)\\d{2}").find(name)?.value ?: "" }
     val fkey: String get() = "$kind:$id"
 }
-data class Ep(val id: String, val title: String, val season: Int, val num: Int, val ext: String)
+data class Ep(val id: String, val title: String, val season: Int, val num: Int, val ext: String,
+              val img: String = "", val plot: String = "", val dur: String = "")
+data class EpInfo(val title: String, val still: String, val overview: String, val runtime: Int, val air: String, val vote: String)
+data class Rec(val title: String, val alt: String)
+data class Person(val name: String, val role: String, val img: String)
+data class Trailer(val title: String, val key: String)
 data class Meta(val backdrop: String?, val overview: String, val rating: String, val year: String, val id: Int = 0, val cast: String = "", val director: String = "", val cert: String = "", val trailer: String = "",
-                val ratingSrc: String = "", val note: String = "")
+                val ratingSrc: String = "", val note: String = "",
+                val genres: String = "", val runtime: String = "", val writer: String = "", val status: String = "", val country: String = "",
+                val logo: String = "", val release: String = "", val people: List<Person> = emptyList(), val trailers: List<Trailer> = emptyList(),
+                val rt: String = "", val mc: String = "", val awards: String = "", val recs: List<Rec> = emptyList())
 data class Guide(val cert: String, val tags: List<String>)
 
 data class Prog(val start: Long, val stop: Long, val title: String)
@@ -191,7 +199,11 @@ object Api {
                 val o = a.optJSONObject(i) ?: continue
                 val n = o.optInt("episode_num", i + 1)
                 val season = o.optInt("season", 0).takeIf { it > 0 } ?: fallbackSeason
-                out.add(Ep(o.s("id"), o.s("title").ifBlank { "Episode $n" }, season, n, o.s("container_extension").ifBlank { "mp4" }))
+                val inf = o.optJSONObject("info")
+                val secs = inf?.optInt("duration_secs", 0) ?: 0
+                val dm = if (secs > 0) secs / 60 else durMin(inf?.s("duration").orEmpty())
+                out.add(Ep(o.s("id"), o.s("title").ifBlank { "Episode $n" }, season, n, o.s("container_extension").ifBlank { "mp4" },
+                    inf?.s("movie_image").orEmpty(), inf?.s("plot").orEmpty(), fmtRun(dm)))
             }
         }
         when (e) {
@@ -226,7 +238,7 @@ object Api {
     private const val IMG = "https://image.tmdb.org/t/p/w1280"
 
     /** "EN - Movie Name (2020) 4K" -> "Movie Name" so TMDB can find it. */
-    private fun cleanTitle(n: String): String {
+    fun cleanTitle(n: String): String {
         var s = n
         s = s.replace(Regex("\\[[^\\]]*\\]|\\([^)]*\\)|\\{[^}]*\\}"), " ")
         s = s.replace(Regex("^\\s*\\|[^|]*\\|\\s*"), "")
@@ -236,9 +248,41 @@ object Api {
         return s.replace(Regex("\\s+"), " ").trim().trim('-', ':', '|').trim()
     }
 
+    private val yearTail = Regex("\\s(19|20)\\d{2}$")
+    private val nonAlnum = Regex("[^\\p{L}\\p{N}]+")
+    /** Comparable form of a title (used to match TMDB suggestions against the provider library). */
+    fun libKey(n: String): String = nz(cleanTitle(n)).replace(yearTail, "").replace(nonAlnum, "")
+
+    private const val IMG_STILL = "https://image.tmdb.org/t/p/w300"
+    private val seasonCache = java.util.Collections.synchronizedMap(HashMap<String, Map<Int, EpInfo>>())
+
+    /** Episode thumbnails, descriptions, runtime, air date and score for one season (TMDB). Empty when unavailable. */
+    fun tmdbSeason(tvId: Int, season: Int): Map<Int, EpInfo> {
+        if (tvId <= 0 || c.tmdb.isBlank()) return emptyMap()
+        val k = "$tvId:$season:${Lang.ar}"
+        seasonCache[k]?.let { return it }
+        return try {
+            val lang = if (Lang.ar) "&language=ar-SA" else ""
+            val arr = JSONObject(tget("/tv/$tvId/season/$season?api_key=${c.tmdb}$lang")).optJSONArray("episodes")
+            val out = HashMap<Int, EpInfo>()
+            if (arr != null) for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                out[o.optInt("episode_number")] = EpInfo(o.s("name"), o.s("still_path").takeIf { it.isNotBlank() }?.let { IMG_STILL + it } ?: "",
+                    o.s("overview"), o.optInt("runtime", 0), o.s("air_date"), o.optDouble("vote_average", 0.0).takeIf { it > 0.0 }?.let { fmt1(it) } ?: "")
+            }
+            out.also { seasonCache[k] = it }
+        } catch (e: Exception) { emptyMap() }
+    }
+
+    /** TMDB request with a fallback to the official alternate API host (some networks block the main one). */
+    private fun tget(path: String): String {
+        return try { get("https://api.themoviedb.org/3$path", 15000) }
+        catch (e: Exception) { get("https://api.tmdb.org/3$path", 15000) }
+    }
+
     private fun search(q: String, type: String, year: String?): JSONObject? {
         val y = if (year != null) (if (type == "tv") "&first_air_date_year=$year" else "&year=$year") else ""
-        val arr = JSONObject(get("$TMDB/search/$type?api_key=${c.tmdb}&include_adult=false&query=${enc(q)}$y", 15000)).optJSONArray("results") ?: return null
+        val arr = JSONObject(tget("/search/$type?api_key=${c.tmdb}&include_adult=false&query=${enc(q)}$y")).optJSONArray("results") ?: return null
         return if (arr.length() > 0) arr.getJSONObject(0) else null
     }
 
@@ -248,7 +292,7 @@ object Api {
         val q = cleanTitle(name)
         if (q.isBlank()) return null
         val year = Regex("(19|20)\\d{2}").find(name)?.value
-        if (year != null) search(q, type, year)?.let { return it }
+        if (year != null) runCatching { search(q, type, year) }.getOrNull()?.let { return it }
         search(q, type, null)?.let { return it }
         val short = q.split(Regex("\\s[-:]\\s|:")).firstOrNull()?.trim()
         if (!short.isNullOrBlank() && short != q) return search(short, type, null)
@@ -277,23 +321,57 @@ object Api {
     private fun positive(s: String) = (s.toDoubleOrNull() ?: 0.0) > 0.0
     private fun fmt1(d: Double) = "%.1f".format(Locale.US, d)
 
-    /** Details page data. Provider info first, TMDB for rating / age rating / cast, OMDb (optional key) for the real IMDb score. Never throws. */
+    private const val IMG_S = "https://image.tmdb.org/t/p/w185"
+    private const val IMG_L = "https://image.tmdb.org/t/p/w500"
+
+    private fun fmtRun(min: Int): String = if (min <= 0) "" else if (min >= 60) (if (min % 60 == 0) "${min / 60}h" else "${min / 60}h ${min % 60}m") else "${min}m"
+
+    /** "01:36:00" -> 96 (minutes). */
+    private fun durMin(s: String): Int {
+        val p = s.trim().split(":").mapNotNull { it.toIntOrNull() }
+        return when (p.size) { 3 -> p[0] * 60 + p[1]; 2 -> p[0] * 60 + p[1]; 1 -> p[0]; else -> 0 }
+    }
+
+    private fun ytKey(s: String): String {
+        val t = s.trim()
+        if (t.isBlank()) return ""
+        Regex("(?:v=|youtu\\.be/|embed/)([A-Za-z0-9_-]{11})").find(t)?.let { return it.groupValues[1] }
+        return if (Regex("^[A-Za-z0-9_-]{11}$").matches(t)) t else ""
+    }
+
+    private fun names(a: JSONArray?, key: String = "name", max: Int = 3): List<String> {
+        if (a == null) return emptyList()
+        val out = linkedSetOf<String>()
+        for (i in 0 until a.length()) { val n = a.optJSONObject(i)?.s(key).orEmpty(); if (n.isNotBlank()) out.add(n); if (out.size >= max) break }
+        return out.toList()
+    }
+
+    /** Details page data. Provider info first, TMDB for rating / age rating / cast / trailers / logo, OMDb (optional key) for the real IMDb score. Never throws. */
     fun tmdb(name: String, series: Boolean, id: String = ""): Meta {
         val omdb = Store.str("omdb", "")
-        val ck = "$series:$id:$name:${c.tmdb.isNotBlank()}:${omdb.isNotBlank()}"
+        val ck = "$series:$id:$name:${c.tmdb.isNotBlank()}:${omdb.isNotBlank()}:${Lang.ar}"
         cache[ck]?.let { return it }
         var backdrop = ""; var overview = ""; var rating = ""; var src = ""; var year = ""
         var cast = ""; var director = ""; var cert = ""; var trailer = ""; var note = ""
+        var genres = ""; var runtime = ""; var writer = ""; var status = ""; var country = ""; var logo = ""; var release = ""
+        var people = emptyList<Person>()
+        val trailers = ArrayList<Trailer>()
+        var tmdbId = 0; var rtScore = ""; var mcScore = ""; var awards = ""; var recs = emptyList<Rec>()
 
         if (id.isNotBlank()) runCatching {
             val j = if (series) JSONObject(act("get_series_info", "series_id=$id")) else JSONObject(act("get_vod_info", "vod_id=$id"))
             val info = j.optJSONObject("info") ?: JSONObject()
             overview = info.s("plot").ifEmpty { info.s("description") }
             rating = info.s("rating").ifEmpty { info.s("kinopoisk_rating") }.takeIf { positive(it) } ?: ""
-            year = info.s("releasedate").ifEmpty { info.s("releaseDate") }.ifEmpty { info.s("year") }.take(4)
+            release = info.s("releasedate").ifEmpty { info.s("releaseDate") }
+            year = release.ifEmpty { info.s("year") }.take(4)
             backdrop = info.optJSONArray("backdrop_path")?.optString(0) ?: ""
             cast = info.s("cast"); director = info.s("director"); trailer = info.s("youtube_trailer")
             cert = info.s("age").ifEmpty { info.s("mpaa") }
+            genres = info.s("genre").split(",", "/").map { it.trim() }.filter { it.isNotBlank() }.joinToString(" • ")
+            country = info.s("country")
+            val secs = info.optInt("duration_secs", 0)
+            runtime = fmtRun(if (secs > 0) secs / 60 else durMin(info.s("duration")).takeIf { it > 0 } ?: info.s("episode_run_time").toIntOrNull() ?: 0)
         }
 
         if (c.tmdb.isBlank()) {
@@ -303,24 +381,89 @@ object Api {
             if (hit == null) note = "Not found on TMDB"
             else {
                 val tid = hit.getInt("id")
+                tmdbId = tid
                 val type = if (series) "tv" else "movie"
                 if (overview.isBlank()) overview = hit.s("overview")
                 if (year.isBlank()) year = hit.s("release_date").ifEmpty { hit.s("first_air_date") }.take(4)
                 if (backdrop.isBlank()) hit.s("backdrop_path").takeIf { it.isNotBlank() }?.let { backdrop = IMG + it }
                 val vote = hit.optDouble("vote_average", 0.0)
                 if (vote > 0.0) { rating = fmt1(vote); src = "TMDB" }
-                val extra = if (series) "credits,content_ratings,external_ids" else "credits,release_dates,external_ids"
-                val d = JSONObject(get("$TMDB/$type/$tid?api_key=${c.tmdb}&append_to_response=$extra", 15000))
-                if (cast.isBlank()) d.optJSONObject("credits")?.optJSONArray("cast")?.let { ca ->
-                    cast = (0 until minOf(5, ca.length())).joinToString(", ") { ca.getJSONObject(it).s("name") }
+                val extra = if (series) "credits,content_ratings,external_ids,images" else "credits,release_dates,external_ids,images"
+                val lg = if (Lang.ar) "&language=ar-SA" else ""
+                val d = JSONObject(tget("/$type/$tid?api_key=${c.tmdb}&append_to_response=$extra&include_image_language=en,null$lg"))
+                if (Lang.ar) d.s("overview").takeIf { it.isNotBlank() }?.let { overview = it }
+
+                // cast with photos
+                val ca = d.optJSONObject("credits")?.optJSONArray("cast")
+                if (ca != null && ca.length() > 0) {
+                    val l = ArrayList<Person>()
+                    for (i in 0 until minOf(15, ca.length())) {
+                        val o = ca.getJSONObject(i)
+                        val n = o.s("name"); if (n.isBlank()) continue
+                        l.add(Person(n, o.s("character"), o.s("profile_path").takeIf { it.isNotBlank() }?.let { IMG_S + it } ?: ""))
+                    }
+                    people = l
+                    if (cast.isBlank()) cast = l.take(5).joinToString(", ") { it.name }
+                }
+                // director / creator and writers
+                val crew = d.optJSONObject("credits")?.optJSONArray("crew")
+                if (director.isBlank()) {
+                    director = if (series) names(d.optJSONArray("created_by")).joinToString(", ")
+                    else crew?.let { cr -> (0 until cr.length()).mapNotNull { cr.optJSONObject(it) }.filter { it.s("job") == "Director" }.map { it.s("name") }.distinct().take(2).joinToString(", ") } ?: ""
+                }
+                if (crew != null) writer = (0 until crew.length()).mapNotNull { crew.optJSONObject(it) }
+                    .filter { it.s("job") in setOf("Writer", "Screenplay", "Story", "Author", "Teleplay") }
+                    .map { it.s("name") }.filter { it.isNotBlank() }.distinct().take(3).joinToString(", ")
+
+                // genres, runtime, status, country, release date
+                names(d.optJSONArray("genres"), "name", 3).takeIf { it.isNotEmpty() }?.let { genres = it.joinToString(" • ") }
+                val rt = if (series) d.optJSONArray("episode_run_time")?.optInt(0, 0) ?: 0 else d.optInt("runtime", 0)
+                if (rt > 0) runtime = fmtRun(rt)
+                status = d.s("status")
+                val pc = names(d.optJSONArray("production_countries"), "name", 4)
+                country = if (pc.isNotEmpty()) pc.joinToString(", ") else {
+                    val oc = d.optJSONArray("origin_country")
+                    if (oc != null) (0 until oc.length()).joinToString(", ") { java.util.Locale("", oc.optString(it)).getDisplayCountry(java.util.Locale.ENGLISH) } else country
+                }
+                d.s("release_date").ifEmpty { d.s("first_air_date") }.takeIf { it.isNotBlank() }?.let { release = it }
+
+                // logo (title image)
+                d.optJSONObject("images")?.optJSONArray("logos")?.let { lg ->
+                    val all = (0 until lg.length()).mapNotNull { lg.optJSONObject(it) }
+                    val best = all.firstOrNull { it.s("iso_639_1") == "en" } ?: all.firstOrNull { it.isNull("iso_639_1") || it.s("iso_639_1").isBlank() } ?: all.firstOrNull()
+                    best?.s("file_path")?.takeIf { it.isNotBlank() }?.let { logo = IMG_L + it }
+                }
+                // suggestions (English titles, so they can be matched against the library)
+                runCatching {
+                    val l = ArrayList<Rec>()
+                    for (kind in listOf("recommendations", "similar")) {
+                        val ra = runCatching { JSONObject(tget("/$type/$tid/$kind?api_key=${c.tmdb}")).optJSONArray("results") }.getOrNull() ?: continue
+                        for (i in 0 until minOf(20, ra.length())) {
+                            val o = ra.optJSONObject(i) ?: continue
+                            val t = o.s("title").ifBlank { o.s("name") }
+                            if (t.isNotBlank()) l.add(Rec(t, o.s("original_title").ifBlank { o.s("original_name") }))
+                        }
+                    }
+                    recs = l
                 }
                 val c2 = certOf(d, series)
                 if (c2.isNotBlank()) cert = c2
                 if (omdb.isNotBlank()) {
                     val imdb = d.optJSONObject("external_ids")?.s("imdb_id").orEmpty().ifBlank { d.s("imdb_id") }
                     if (imdb.isNotBlank()) {
-                        val r = JSONObject(get("https://www.omdbapi.com/?apikey=$omdb&i=$imdb", 15000)).s("imdbRating")
+                        val o = JSONObject(get("https://www.omdbapi.com/?apikey=$omdb&i=$imdb", 15000))
+                        val r = o.s("imdbRating")
                         if (positive(r)) { rating = r; src = "IMDb" } else note = "No IMDb score for this title"
+                        o.optJSONArray("Ratings")?.let { ra ->
+                            for (i in 0 until ra.length()) {
+                                val x = ra.optJSONObject(i) ?: continue
+                                when (x.s("Source")) {
+                                    "Rotten Tomatoes" -> rtScore = x.s("Value")
+                                    "Metacritic" -> mcScore = x.s("Value").substringBefore("/")
+                                }
+                            }
+                        }
+                        awards = o.s("Awards").takeIf { it.isNotBlank() && it != "N/A" } ?: ""
                     }
                 }
             }
@@ -328,8 +471,11 @@ object Api {
             note = "TMDB: " + (e.message ?: e.javaClass.simpleName)
         }
 
+        if (people.isEmpty() && cast.isNotBlank()) people = cast.split(",").map { it.trim() }.filter { it.isNotBlank() }.take(15).map { Person(it, "", "") }
         if (overview.isBlank()) overview = "No overview available."
-        val m = Meta(backdrop.ifBlank { null }, overview, rating, year, 0, cast, director, cert, trailer, src, note)
+        val m = Meta(backdrop.ifBlank { null }, overview, rating, year, tmdbId, cast, director, cert, trailer, src, note,
+            genres, runtime, writer, status, country, logo, release, people, trailers.toList(),
+            rtScore, mcScore, awards, recs)
         if (note.isBlank()) cache[ck] = m
         return m
     }
@@ -356,5 +502,37 @@ object Api {
             tagWords.forEach { (w, t) -> if (n.contains(w)) tags.add(t) }
         }
         return if (cert.isBlank() && tags.isEmpty()) null else Guide(cert, tags.toList())
+    }
+}
+
+
+/** Matches TMDB suggestions against the provider library (rebuilt when the library reloads). */
+object LibIndex {
+    private var ver = -1
+    private var mov: Map<String, Item> = emptyMap()
+    private var ser: Map<String, Item> = emptyMap()
+
+    private fun idx(l: List<Item>): Map<String, Item> {
+        val m = HashMap<String, Item>()
+        for (x in l) { val k = Api.libKey(x.name); if (k.isNotBlank() && !m.containsKey(k)) m[k] = x }
+        return m
+    }
+
+    @Synchronized private fun ensure() {
+        val v = Repo.version
+        if (v == ver && (mov.isNotEmpty() || ser.isNotEmpty())) return
+        mov = idx(Repo.movies); ser = idx(Repo.series); ver = v
+    }
+
+    fun match(recs: List<Rec>, series: Boolean, self: Item): List<Item> {
+        ensure()
+        val m = if (series) ser else mov
+        val out = ArrayList<Item>()
+        for (r in recs) {
+            val x = m[Api.libKey(r.title)] ?: (if (r.alt.isNotBlank()) m[Api.libKey(r.alt)] else null) ?: continue
+            if (x.id != self.id && out.none { it.id == x.id }) out.add(x)
+            if (out.size >= 15) break
+        }
+        return out
     }
 }

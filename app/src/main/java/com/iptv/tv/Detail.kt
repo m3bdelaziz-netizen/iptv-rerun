@@ -58,11 +58,36 @@ private fun Focusable(mod: Modifier = Modifier, shape: Shape = RoundedCornerShap
 }
 
 @Composable
-private fun PlayPill(label: String, mod: Modifier = Modifier, onClick: () -> Unit) {
-    val white = Brush.verticalGradient(listOf(Color.White, Color(0xFFD5DAE6)))
-    Focusable(mod, RoundedCornerShape(50), onClick) { foc ->
-        Box(Modifier.background(if (foc) Theme.gloss else white).padding(horizontal = 26.dp, vertical = 10.dp), contentAlignment = Alignment.Center) {
-            Text(label, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, color = if (foc) Theme.onAccent else Color.Black)
+private fun PlayPill(label: String, mod: Modifier = Modifier, progress: Float = 0f, onClick: () -> Unit) {
+    val text = label.removePrefix("▶").trim()
+    val shape = RoundedCornerShape(50)
+    Focusable(mod.height(48.dp), shape, onClick) { foc ->
+        val bg = if (foc) Theme.gloss else Brush.verticalGradient(listOf(Color(0x40FFFFFF), Color(0x18FFFFFF)))
+        Box(
+            Modifier.fillMaxSize().background(bg).then(if (!foc) Modifier.border(1.5.dp, Theme.accent, shape) else Modifier),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            Row(Modifier.padding(start = 8.dp, end = 22.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                // round badge with a play triangle: accent on the dark glass, white when focused
+                Box(Modifier.size(32.dp).clip(CircleShape).background(if (foc) Color.White else Theme.accent), contentAlignment = Alignment.Center) {
+                    androidx.compose.foundation.Canvas(Modifier.size(12.dp)) {
+                        val w = size.width; val h = size.height
+                        drawPath(
+                            androidx.compose.ui.graphics.Path().apply { moveTo(w * 0.1f, 0f); lineTo(w * 0.1f, h); lineTo(w, h / 2f); close() },
+                            if (foc) Theme.accent else Theme.onAccent
+                        )
+                    }
+                }
+                Text(text, fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    color = if (foc) Theme.onAccent else Color.White)
+            }
+            // how far you have watched (shown when there is something to resume)
+            if (progress > 0f) Box(
+                Modifier.align(Alignment.BottomStart).padding(horizontal = 24.dp, vertical = 4.dp).fillMaxWidth().height(3.dp)
+                    .clip(RoundedCornerShape(2.dp)).background(Color(0x55FFFFFF))
+            ) {
+                Box(Modifier.fillMaxWidth(progress.coerceIn(0f, 1f)).fillMaxHeight().background(if (foc) Theme.onAccent else Theme.accent))
+            }
         }
     }
 }
@@ -309,7 +334,7 @@ private fun DetailBody(item: Item, play: (PlayArgs) -> Unit, open: (Item) -> Uni
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
-                    PlayPill(playLabel, Modifier.width(190.dp).focusRequester(playFR), onPlay)
+                    PlayPill(playLabel, Modifier.width(215.dp).focusRequester(playFR), if (!isSeries && hist != null && hist.pos > 5000) hist.progress else 0f, onPlay)
                     val fav = Store.favs.contains(item.fkey)
                     RoundBtn(if (fav) "★" else "☆", if (fav) "Favorited" else "Favorite") { Store.fav(item) }
                     if (!isSeries && hist != null && hist.pos > 5000) RoundBtn("↺", "Restart") { History.remove(movie.key); play(PlayArgs(vod = listOf(movie))) }

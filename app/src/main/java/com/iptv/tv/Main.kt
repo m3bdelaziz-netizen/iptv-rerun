@@ -151,7 +151,7 @@ fun MainScreen(
     val fv = Store.favs.size
     val sort = remember { Store.int("sortVod", Store.int("sort", 0)) }
     val showLabel = remember { !Store.bool("hideLabels", false) }
-    val showRating = remember { Store.bool("rating", true) }
+    val showRating = remember { Store.bool("rating", true) && !Api.extRatings() }   // with TMDB + OMDb keys saved, posters show no provider rating
     val cardMin = remember { when (Store.int("grid", 1)) { 0 -> 100; 2 -> 140; else -> 120 } }
 
     val entries = remember(tab, ver) {

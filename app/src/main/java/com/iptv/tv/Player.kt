@@ -144,6 +144,7 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
     val focusManager = LocalFocusManager.current
     val topFR = remember { FocusRequester() }            // selected Movies / Series / Live tile (long press Up lands here)
     val holdSplit = remember { HoldState() }
+    val backLong = remember { BooleanArray(1) }           // a long press on Back already opened full screen: ignore that press's Back
     val holdFull = remember { HoldState() }
     var recentOpen by remember { mutableStateOf(false) }  // "last 10 channels" overlay
     val prevKey = remember { arrayOfNulls<String>(2) }    // [0] channel watched before this one, [1] the one playing now
@@ -496,6 +497,15 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
     fun splitKey(e: KeyEvent): Boolean {
         if (moveId != null) return false
         val k = e.keyCode
+        // Hold Back in the channel guide: the channel that is playing opens full screen (a short Back works as before).
+        if (k == KeyEvent.KEYCODE_BACK) {
+            if (e.action == KeyEvent.ACTION_DOWN) {
+                if (e.repeatCount == 0) backLong[0] = false
+                else if (backLong[0]) return true
+                else if (cur != null) { backLong[0] = true; fullScreen = true; return true }
+            }
+            return false
+        }
         val up = Remote.isPageUp(k); val dn = Remote.isPageDown(k)
         if (up || dn) {
             if (e.action != KeyEvent.ACTION_DOWN) return true
@@ -524,6 +534,7 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
     // - VOD full-screen -> first Back opens controls; second Back (when controls/bar already open) exits
     BackHandler(enabled = menu || isLive || !isLive) {
         when {
+            backLong[0] -> backLong[0] = false   // this Back is the release of the long press that just opened full screen
             menu -> menu = false
             moveId != null -> finishMove(false)
             isLive && fullScreen -> fullScreen = false

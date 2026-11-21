@@ -287,13 +287,20 @@ object Api {
     /** "EN - Movie Name (2020) 4K" -> "Movie Name" so TMDB can find it. */
     fun cleanTitle(n: String): String {
         var s = n
-        s = s.replace(Regex("\\[[^\\]]*\\]|\\([^)]*\\)|\\{[^}]*\\}"), " ")
-        s = s.replace(Regex("^\\s*\\|[^|]*\\|\\s*"), "")
-        s = s.replace(Regex("^\\s*[A-Z]{2,3}\\s*[:|\\-]\\s*"), "")
-        s = s.replace(Regex("(?i)\\b(4k|uhd|fhd|hd|sd|hdr|1080p|720p|2160p|bluray|web-?dl|multi|dubbed|مدبلج|مترجم)\\b"), " ")
-        s = s.replace(Regex("\\s+S\\d+E\\d+$"), "")
-        return s.replace(Regex("\\s+"), " ").trim().trim('-', ':', '|').trim()
+        s = s.replace(CT_BRACKETS, " ")
+        s = s.replace(CT_PIPES, "")
+        s = s.replace(CT_LANG, "")
+        s = s.replace(CT_TAGS, " ")
+        s = s.replace(CT_EP, "")
+        return s.replace(CT_SPACES, " ").trim().trim('-', ':', '|').trim()
     }
+    private val CT_BRACKETS = Regex("\\[[^\\]]*\\]|\\([^)]*\\)|\\{[^}]*\\}")
+    private val CT_PIPES = Regex("^\\s*\\|[^|]*\\|\\s*")
+    private val CT_LANG = Regex("^\\s*[A-Z]{2,3}\\s*[:|\\-]\\s*")
+    private val CT_TAGS = Regex("(?i)\\b(4k|uhd|fhd|hd|sd|hdr|1080p|720p|2160p|bluray|web-?dl|multi|dubbed|مدبلج|مترجم)\\b")
+    private val CT_EP = Regex("\\s+S\\d+E\\d+$")
+    private val CT_SPACES = Regex("\\s+")
+
 
     private val yearTail = Regex("\\s(19|20)\\d{2}$")
     private val nonAlnum = Regex("[^\\p{L}\\p{N}]+")
@@ -391,6 +398,8 @@ object Api {
         return any
     }
 
+    /** True when both a TMDB and an OMDb key are saved: then ratings come only from them, never from the IPTV provider. */
+    fun extRatings() = c.tmdb.isNotBlank() && Store.str("omdb", "").isNotBlank()
     private fun positive(s: String) = (s.toDoubleOrNull() ?: 0.0) > 0.0
     private fun fmt1(d: Double) = "%.1f".format(Locale.US, d)
 
@@ -436,14 +445,15 @@ object Api {
 
     /** PHASE 1 (fast): everything the IPTV provider already knows: plot, genres, duration, cast, director, year, rating, backdrop. Never throws. */
     fun providerMeta(series: Boolean, id: String): Meta {
-        val ck = "${base()}:$series:$id"
+        val ck = "${base()}:$series:$id:${if (extRatings()) 1 else 0}"   // key state is part of the cache key: saving keys takes effect at once
         pcache[ck]?.let { return it }
         if (id.isBlank()) return Meta(null, "", "", "")
         return try {
             val j = JSONObject(rawInfo(series, id))
             val info = j.optJSONObject("info") ?: JSONObject()
             val overview = info.s("plot").ifEmpty { info.s("description") }
-            val rating = info.s("rating").ifEmpty { info.s("kinopoisk_rating") }.takeIf { positive(it) } ?: ""
+            // With both a TMDB and an OMDb key saved, the provider's score is ignored (TMDB / IMDb replace it in tmdbExtra / omdbExtra).
+            val rating = if (extRatings()) "" else info.s("rating").ifEmpty { info.s("kinopoisk_rating") }.takeIf { positive(it) } ?: ""
             val release = info.s("releasedate").ifEmpty { info.s("releaseDate") }
             val year = release.ifEmpty { info.s("year") }.take(4)
             val secs = info.optInt("duration_secs", 0)

@@ -542,16 +542,24 @@ object Api {
     private val ocache = java.util.Collections.synchronizedMap(HashMap<String, Meta>())
 
     /** PHASE 3 (optional OMDb key): real IMDb score, Rotten Tomatoes, Metacritic, awards. Never throws. */
-    fun omdbExtra(base: Meta): Meta {
+    fun omdbExtra(base: Meta, name: String = "", series: Boolean = false): Meta {
         val key = Store.str("omdb", "")
-        if (key.isBlank() || base.imdb.isBlank()) return base
-        val ck = "${base.imdb}:$key"
+        if (key.isBlank()) return base
+        // Normally by IMDb id (found through TMDB). When TMDB gave no id (blocked, no key, no match) OMDb is asked by title + year instead.
+        val q = if (base.imdb.isNotBlank()) "i=${base.imdb}" else {
+            val t = cleanTitle(name).replace(yearTail, "")
+            if (t.isBlank()) return base
+            "t=${enc(t)}&type=${if (series) "series" else "movie"}" + (base.year.takeIf { it.length == 4 }?.let { "&y=$it" } ?: "")
+        }
+        val ck = "$q:$key"
         ocache[ck]?.let { return it }
         return try {
-            val o = JSONObject(fget("https://www.omdbapi.com/?apikey=$key&i=${base.imdb}"))
+            val o = JSONObject(fget("https://www.omdbapi.com/?apikey=$key&$q"))
+            if (o.s("Response").equals("False", true)) return base   // not found / daily limit reached: try again next time
             var rating = base.rating; var src = base.ratingSrc
             val r = o.s("imdbRating")
-            if (positive(r)) { rating = r; src = "IMDb" }
+            // the provider's score is replaced only when both keys are saved (or when the provider has none)
+            if (positive(r) && (extRatings() || base.rating.isBlank())) { rating = r; src = "IMDb" }
             var rtS = ""; var mcS = ""
             o.optJSONArray("Ratings")?.let { ra ->
                 for (i in 0 until ra.length()) {
@@ -559,14 +567,14 @@ object Api {
                     when (x.s("Source")) { "Rotten Tomatoes" -> rtS = x.s("Value"); "Metacritic" -> mcS = x.s("Value").substringBefore("/") }
                 }
             }
-            val m = base.copy(rating = rating, ratingSrc = src, rt = rtS, mc = mcS, awards = o.s("Awards").takeIf { it.isNotBlank() && it != "N/A" } ?: "")
+            val m = base.copy(rating = rating, ratingSrc = src, imdb = base.imdb.ifBlank { o.s("imdbID") }, rt = rtS, mc = mcS, awards = o.s("Awards").takeIf { it.isNotBlank() && it != "N/A" } ?: "")
             ocache[ck] = m
             m
         } catch (e: Exception) { base }
     }
 
     /** All phases in one blocking call (kept for other screens). */
-    fun tmdb(name: String, series: Boolean, id: String = ""): Meta = omdbExtra(tmdbExtra(providerMeta(series, id), name, series, id))
+    fun tmdb(name: String, series: Boolean, id: String = ""): Meta = omdbExtra(tmdbExtra(providerMeta(series, id), name, series, id), name, series)
 
     private val tagWords = listOf(
         "violence" to "Violence", "gore" to "Gore", "blood" to "Blood", "nudity" to "Nudity", "sex" to "Sexual content",

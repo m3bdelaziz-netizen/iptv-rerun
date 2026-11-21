@@ -221,6 +221,7 @@ private fun DetailBody(item: Item, play: (PlayArgs) -> Unit, open: (Item) -> Uni
     var eps by remember { mutableStateOf<List<Ep>>(emptyList()) }
     var loaded by remember { mutableStateOf(false) }
     var epErr by remember { mutableStateOf("") }
+    var ratingsDone by remember { mutableStateOf(false) }
     var retry by remember { mutableStateOf(0) }
     var season by remember { mutableStateOf(-1) }
     var more by remember { mutableStateOf(false) }
@@ -238,7 +239,8 @@ private fun DetailBody(item: Item, play: (PlayArgs) -> Unit, open: (Item) -> Uni
         meta = p
         val t = withContext(Dispatchers.IO) { Api.tmdbExtra(p, item.name, isSeries, item.id) }
         meta = t
-        meta = withContext(Dispatchers.IO) { Api.omdbExtra(t) }
+        meta = withContext(Dispatchers.IO) { Api.omdbExtra(t, item.name, isSeries) }
+        ratingsDone = true
     }
     LaunchedEffect(item, retry) {
         if (isSeries) {
@@ -326,6 +328,10 @@ private fun DetailBody(item: Item, play: (PlayArgs) -> Unit, open: (Item) -> Uni
                 if (m != null) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         RatingBadge(m)
+                        if (m.rating.isBlank() && ratingsDone) Text(
+                            if (Api.c.tmdb.isBlank() && Store.str("omdb", "").isBlank()) "No rating: save a TMDB or OMDb key in Settings"
+                            else "No rating found (check the TMDB / OMDb key and the internet)",
+                            fontSize = 11.sp, color = Theme.muted)
                         if (m.rt.isNotBlank()) ScoreChip("RT", m.rt, Color(0xFFFA320A))
                         if (m.mc.isNotBlank()) {
                             val n = m.mc.toIntOrNull() ?: 0

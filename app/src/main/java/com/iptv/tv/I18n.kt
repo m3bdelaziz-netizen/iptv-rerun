@@ -122,7 +122,7 @@ private val AR = mapOf(
     "Favorite" to "المفضلة", "Favorited" to "في المفضلة", "Restart" to "من البداية",
     "Cast" to "طاقم التمثيل", "Movie Details" to "تفاصيل الفيلم", "Series Details" to "تفاصيل المسلسل",
     "Status" to "الحالة", "Release Info" to "تاريخ الإصدار", "Runtime" to "المدة", "Certification" to "التصنيف العمري", "Origin Country" to "بلد الإنتاج",
-    "Director:" to "المخرج:", "Creator:" to "المؤلف:", "Writer:" to "الكاتب:", "Show More ▾" to "عرض المزيد ▾", "Show Less ▴" to "عرض أقل ▴", "Similar" to "مشابه", "Awards:" to "الجوائز:"
+    "Director:" to "المخرج:", "Creator:" to "المؤلف:", "Writer:" to "الكاتب:", "Show More ▾" to "عرض المزيد ▾", "Show Less ▴" to "عرض أقل ▴", "Similar" to "مشابه", "Obsidian Gold" to "ذهبي أسود", "Aurora" to "شفق", "Rose Noir" to "وردي داكن", "Emerald Luxe" to "زمردي فاخر", "Amethyst" to "جمشت", "Arctic Steel" to "فولاذي قطبي", "Champagne" to "شمبانيا", "Deep Space" to "فضاء عميق", "Ice" to "جليدي", "Aqua" to "أكوا", "Mint" to "نعناعي", "Lime" to "ليموني", "Peach" to "خوخي", "Coral" to "مرجاني", "Rose" to "وردي", "Lavender" to "لافندر", "Sky" to "سماوي", "Awards:" to "الجوائز:", "Cast:" to "طاقم التمثيل:", "Season" to "موسم", "Seasons" to "مواسم", "Episodes" to "حلقات"
 )
 private val PRE = listOf(
     "Season " to "الموسم ", "Error: " to "خطأ: ", "Playback error: " to "خطأ في التشغيل: ", "Login failed: " to "فشل تسجيل الدخول: ",

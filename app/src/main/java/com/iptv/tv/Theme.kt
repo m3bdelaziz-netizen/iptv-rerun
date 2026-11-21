@@ -3,7 +3,9 @@ package com.iptv.tv
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontFamily
 
@@ -25,12 +27,24 @@ object Theme {
         Palette("Mocha",        0xFF17110D, 0xFF211812, 0xFF2A1F17, 0xFF372A20, 0xFF4A392B),
         Palette("Slate",        0xFF0F1419, 0xFF161D25, 0xFF1C2530, 0xFF263341, 0xFF32445A),
         Palette("Sunset",       0xFF1B0F1F, 0xFF27142B, 0xFF301935, 0xFF3F2147, 0xFF52295C),
-        Palette("Teal Noir",    0xFF031514, 0xFF062120, 0xFF082B2A, 0xFF0D3A38, 0xFF144D4B)
+        Palette("Teal Noir",    0xFF031514, 0xFF062120, 0xFF082B2A, 0xFF0D3A38, 0xFF144D4B),
+        // premium additions (appended so saved choices keep their positions)
+        Palette("Obsidian Gold", 0xFF0C0A07, 0xFF14100A, 0xFF1B150D, 0xFF271F13, 0xFF352B1B),
+        Palette("Aurora",        0xFF04131F, 0xFF071E2E, 0xFF0A2940, 0xFF0F3753, 0xFF174A6C),
+        Palette("Rose Noir",     0xFF16090F, 0xFF210E17, 0xFF2B121E, 0xFF3A192A, 0xFF4E2238),
+        Palette("Emerald Luxe",  0xFF04140E, 0xFF071F16, 0xFF0A2A1E, 0xFF10392A, 0xFF184D39),
+        Palette("Amethyst",      0xFF0F0820, 0xFF190E33, 0xFF22134A, 0xFF301B69, 0xFF422688),
+        Palette("Arctic Steel",  0xFF0B1118, 0xFF121B26, 0xFF182433, 0xFF223348, 0xFF2F455F),
+        Palette("Champagne",     0xFF141110, 0xFF1D1917, 0xFF26211E, 0xFF332C28, 0xFF453C36),
+        Palette("Deep Space",    0xFF05060F, 0xFF0A0C1E, 0xFF0F1230, 0xFF171B45, 0xFF222763)
     )
     val modes: List<String> = palettes.map { it.name }
     val accents: List<Pair<String, Long>> = listOf(
         "Red" to 0xFFE50914, "Blue" to 0xFF2979FF, "Green" to 0xFF00C853, "Purple" to 0xFF8E44FF,
-        "Orange" to 0xFFFF6D00, "Teal" to 0xFF00BFA5, "Pink" to 0xFFFF4081, "Gold" to 0xFFFFC107
+        "Orange" to 0xFFFF6D00, "Teal" to 0xFF00BFA5, "Pink" to 0xFFFF4081, "Gold" to 0xFFFFC107,
+        // light & glossy additions
+        "Ice" to 0xFF7DD3FC, "Aqua" to 0xFF4DE8E0, "Mint" to 0xFF6BFFC1, "Lime" to 0xFFC6FF4D, "Champagne" to 0xFFF5E1A4,
+        "Peach" to 0xFFFFB38A, "Coral" to 0xFFFF7A70, "Rose" to 0xFFFF8FBF, "Lavender" to 0xFFC4A8FF, "Sky" to 0xFF5AB2FF
     )
 
     private var modeState by mutableStateOf(0)
@@ -47,6 +61,9 @@ object Theme {
 
     val accent: Color get() = Color(accents[accentIdx].second)
     val onAccent: Color get() = if (accent.luminance() > 0.5f) Color.Black else Color.White
+
+    /** Glossy accent fill: bright highlight on top fading into the accent and a slightly deeper base. */
+    val gloss: Brush get() = Brush.verticalGradient(listOf(lerp(accent, Color.White, 0.42f), accent, lerp(accent, Color.Black, 0.14f)))
 
     val bg: Color get() = Color(palettes[mode].bg)
     val sidebar: Color get() = Color(palettes[mode].sidebar)

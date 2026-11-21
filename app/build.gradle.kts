@@ -2,7 +2,15 @@ plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
 android {
     namespace = "com.iptv.tv"
     compileSdk = 34
-    defaultConfig { applicationId = "com.iptv.tv"; minSdk = 23; targetSdk = 34; versionCode = 10; versionName = "1.10" }
+    defaultConfig { applicationId = "com.iptv.tv"; minSdk = 23; targetSdk = 34; versionCode = 12; versionName = "1.12" }
+    buildTypes {
+        // Release builds are much faster than debug (R8 shrinks and optimizes the code). Use a release build for real TV use.
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
     buildFeatures { compose = true }
     composeOptions { kotlinCompilerExtensionVersion = "1.5.14" }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17; isCoreLibraryDesugaringEnabled = true }
@@ -20,6 +28,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:1.3.1")
     implementation("androidx.media3:media3-ui:1.3.1")
     implementation("io.coil-kt:coil-compose:2.6.0")
+    implementation("androidx.profileinstaller:profileinstaller:1.3.1")   // installs the precompiled profiles bundled with Compose / Media3
     implementation("com.google.zxing:core:3.5.3")
     implementation("com.wireguard.android:tunnel:1.0.20230706")
 }

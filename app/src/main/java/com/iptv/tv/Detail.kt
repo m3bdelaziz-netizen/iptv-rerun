@@ -15,6 +15,8 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -57,8 +59,9 @@ private fun Focusable(mod: Modifier = Modifier, shape: Shape = RoundedCornerShap
 
 @Composable
 private fun PlayPill(label: String, mod: Modifier = Modifier, onClick: () -> Unit) {
+    val white = Brush.verticalGradient(listOf(Color.White, Color(0xFFD5DAE6)))
     Focusable(mod, RoundedCornerShape(50), onClick) { foc ->
-        Box(Modifier.background(if (foc) Theme.accent else Color.White).padding(horizontal = 26.dp, vertical = 9.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.background(if (foc) Theme.gloss else white).padding(horizontal = 26.dp, vertical = 10.dp), contentAlignment = Alignment.Center) {
             Text(label, fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1, color = if (foc) Theme.onAccent else Color.Black)
         }
     }
@@ -68,7 +71,7 @@ private fun PlayPill(label: String, mod: Modifier = Modifier, onClick: () -> Uni
 private fun RoundBtn(glyph: String, label: String, onClick: () -> Unit) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Focusable(Modifier, CircleShape, onClick) { foc ->
-            Box(Modifier.size(42.dp).background(if (foc) Theme.accent else Color(0x33FFFFFF)), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(40.dp).background(if (foc) Theme.gloss else Brush.verticalGradient(listOf(Color(0x44FFFFFF), Color(0x22FFFFFF)))), contentAlignment = Alignment.Center) {
                 Text(glyph, fontSize = 17.sp, color = if (foc) Theme.onAccent else Color.White)
             }
         }
@@ -77,8 +80,8 @@ private fun RoundBtn(glyph: String, label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun SectionTitle(t: String) {
-    Text(t, Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp), fontSize = 18.sp, fontWeight = FontWeight.Bold)
+private fun SectionTitle(t: String, start: androidx.compose.ui.unit.Dp = 24.dp) {
+    Text(t, Modifier.padding(start = start, top = 14.dp, bottom = 6.dp), fontSize = 16.sp, fontWeight = FontWeight.Bold)
 }
 
 @Composable
@@ -104,11 +107,11 @@ private fun RatingBadge(m: Meta) {
 }
 
 @Composable
-private fun CrewLine(label: String, value: String) {
+private fun CrewLine(label: String, value: String, lines: Int = 2) {
     if (value.isBlank()) return
     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(label, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = Theme.muted)
-        Text(value, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(value, Modifier.weight(1f, fill = false), fontSize = 12.sp, maxLines = lines, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -121,20 +124,6 @@ private fun DetailRow(label: String, value: String) {
         Text(value, Modifier.widthIn(max = 320.dp), fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
     }
     Box(Modifier.fillMaxWidth().height(1.dp).background(Color(0x22FFFFFF)))
-}
-
-@Composable
-private fun CastCard(p: Person) {
-    Focusable(Modifier, RoundedCornerShape(12.dp)) { _ ->
-        Column(Modifier.width(92.dp).padding(6.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Box(Modifier.size(66.dp).clip(CircleShape).background(Theme.card), contentAlignment = Alignment.Center) {
-                if (p.img.isBlank()) Text(p.name.take(1).uppercase(), fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Theme.muted)
-                else Img(p.img, Modifier.fillMaxSize(), ContentScale.Crop, 185, 185)
-            }
-            Text(p.name, Modifier.widthIn(max = 80.dp), fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (p.role.isNotBlank()) Text(p.role, Modifier.widthIn(max = 80.dp), fontSize = 10.sp, color = Theme.muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-    }
 }
 
 @Composable
@@ -217,7 +206,15 @@ private fun DetailBody(item: Item, play: (PlayArgs) -> Unit, open: (Item) -> Uni
     val lastKey = "lastEp_${Store.pid()}_${item.id}"
 
     LaunchedEffect(Unit) { delay(120); runCatching { playFR.requestFocus() } }
-    LaunchedEffect(item) { meta = withContext(Dispatchers.IO) { runCatching { Api.tmdb(item.name, isSeries, item.id) }.getOrNull() } }
+
+    // Progressive loading: provider data first (fast), then TMDB, then OMDb. Each step updates the page as soon as it arrives.
+    LaunchedEffect(item) {
+        val p = withContext(Dispatchers.IO) { Api.providerMeta(isSeries, item.id) }
+        meta = p
+        val t = withContext(Dispatchers.IO) { Api.tmdbExtra(p, item.name, isSeries, item.id) }
+        meta = t
+        meta = withContext(Dispatchers.IO) { Api.omdbExtra(t) }
+    }
     LaunchedEffect(item, retry) {
         if (isSeries) {
             loaded = false
@@ -229,13 +226,12 @@ private fun DetailBody(item: Item, play: (PlayArgs) -> Unit, open: (Item) -> Uni
             loaded = true
         }
     }
-
     LaunchedEffect(meta?.id, season) {
         epInfo = emptyMap()
         val tid = meta?.id ?: 0
         if (isSeries && tid > 0 && season >= 0) epInfo = withContext(Dispatchers.IO) { Api.tmdbSeason(tid, season) }
     }
-    LaunchedEffect(meta, Repo.version) {
+    LaunchedEffect(meta?.recs, Repo.version) {
         val rs = meta?.recs ?: emptyList()
         similar = if (rs.isEmpty()) emptyList() else withContext(Dispatchers.Default) { runCatching { LibIndex.match(rs, isSeries, item) }.getOrDefault(emptyList()) }
     }
@@ -265,40 +261,45 @@ private fun DetailBody(item: Item, play: (PlayArgs) -> Unit, open: (Item) -> Uni
         }
     }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 48.dp)) {
-        // ---- hero: backdrop, title / logo, genres, Play + round buttons
-        item {
-            Box(Modifier.fillMaxWidth().height(300.dp)) {
-                val bd = m?.backdrop?.takeIf { it.isNotBlank() }
-                Img(bd ?: item.img, Modifier.fillMaxSize().alpha(if (bd != null) 1f else 0.22f), ContentScale.Crop, 1280, 720)
-                Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Theme.bg.copy(alpha = 0.92f), Theme.bg.copy(alpha = 0.35f), Color.Transparent))))
-                Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0.45f to Color.Transparent, 1f to Theme.bg)))
-                Column(Modifier.align(Alignment.BottomStart).padding(start = 24.dp, end = 24.dp, bottom = 6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (m != null && m.logo.isNotBlank()) Img(m.logo, Modifier.height(62.dp).width(260.dp), ContentScale.Fit, 600, 200, Alignment.CenterStart)
-                    else Text(item.name, Modifier.widthIn(max = 520.dp), fontSize = 26.sp, fontWeight = FontWeight.Black, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    if (m != null && m.genres.isNotBlank()) Text(m.genres, fontSize = 12.sp, color = Theme.muted, maxLines = 1)
-                    Spacer(Modifier.height(2.dp))
-                    PlayPill(playLabel, Modifier.width(260.dp).focusRequester(playFR), onPlay)
-                    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                        val fav = Store.favs.contains(item.fkey)
-                        RoundBtn(if (fav) "★" else "☆", if (fav) "Favorited" else "Favorite") { Store.fav(item) }
-                        if (!isSeries && hist != null && hist.pos > 5000) RoundBtn("↺", "Restart") { History.remove(movie.key); play(PlayArgs(vod = listOf(movie))) }
+    val runtime = (m?.runtime ?: "").ifBlank { eps.firstOrNull { it.dur.isNotBlank() }?.dur.orEmpty() }
+    val title = Api.cleanTitle(item.name).ifBlank { item.name }
+
+    Box(Modifier.fillMaxSize()) {
+        // fixed backdrop (does not scroll, so nothing repaints while moving around)
+        val bd = m?.backdrop?.takeIf { it.isNotBlank() }
+        Img(bd ?: item.img, Modifier.fillMaxSize().alpha(if (bd != null) 0.40f else 0.16f), ContentScale.Crop, 960, 540)
+        Box(Modifier.fillMaxSize().background(Brush.horizontalGradient(listOf(Theme.bg.copy(alpha = 0.97f), Theme.bg.copy(alpha = 0.80f), Theme.bg.copy(alpha = 0.55f)))))
+
+        Row(Modifier.fillMaxSize().padding(start = 24.dp, end = 24.dp, top = 16.dp), horizontalArrangement = Arrangement.spacedBy(22.dp)) {
+            // ---------------- LEFT: always-visible info panel with Play
+            Column(Modifier.weight(0.46f).fillMaxHeight().verticalScroll(rememberScrollState()).padding(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Box(Modifier.width(96.dp).height(144.dp).clip(RoundedCornerShape(8.dp)).background(Theme.card)) {
+                        Img(item.img, Modifier.fillMaxSize(), ContentScale.Crop, 300, 450)
+                    }
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        if (m != null && m.logo.isNotBlank()) Img(m.logo, Modifier.height(54.dp).fillMaxWidth(), ContentScale.Fit, 600, 200, Alignment.CenterStart)
+                        else Text(title, fontSize = 22.sp, fontWeight = FontWeight.Black, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                        if (m != null && m.genres.isNotBlank()) Text(m.genres, fontSize = 11.sp, color = Theme.muted, maxLines = 2)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            val yr = m?.year.orEmpty()
+                            if (yr.isNotBlank()) Text(yr, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                            if (runtime.isNotBlank()) Box(Modifier.background(Theme.gloss, RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 2.dp)) {
+                                Text(runtime, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Theme.onAccent)
+                            }
+                            val cert = m?.cert.orEmpty()
+                            if (cert.isNotBlank()) Box(Modifier.border(1.dp, Color.White.copy(alpha = 0.8f), RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 1.dp)) {
+                                Text(cert, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        if (isSeries && loaded && eps.isNotEmpty()) {
+                            val ns = eps.map { it.season }.distinct().size
+                            Text("$ns " + tr(if (ns == 1) "Season" else "Seasons") + "  •  ${eps.size} " + tr("Episodes"), fontSize = 11.sp, color = Theme.muted)
+                        }
                     }
                 }
-            }
-        }
-
-        // ---- year, runtime, age rating, score, crew, overview
-        item {
-            Column(Modifier.padding(horizontal = 24.dp).widthIn(max = 680.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (m == null) Text("Loading details...", fontSize = 12.sp, color = Theme.muted)
-                else {
+                if (m != null) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        if (m.year.isNotBlank()) Text(m.year, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                        if (m.runtime.isNotBlank()) Text(m.runtime, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                        if (m.cert.isNotBlank()) Box(Modifier.border(1.dp, Color.White.copy(alpha = 0.8f), RoundedCornerShape(4.dp)).padding(horizontal = 6.dp, vertical = 1.dp)) {
-                            Text(m.cert, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
                         RatingBadge(m)
                         if (m.rt.isNotBlank()) ScoreChip("RT", m.rt, Color(0xFFFA320A))
                         if (m.mc.isNotBlank()) {
@@ -306,86 +307,90 @@ private fun DetailBody(item: Item, play: (PlayArgs) -> Unit, open: (Item) -> Uni
                             ScoreChip("MC", m.mc, if (n >= 61) Color(0xFF3FA535) else if (n >= 40) Color(0xFFC98F00) else Color(0xFFD32F2F))
                         }
                     }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.Top) {
+                    PlayPill(playLabel, Modifier.width(190.dp).focusRequester(playFR), onPlay)
+                    val fav = Store.favs.contains(item.fkey)
+                    RoundBtn(if (fav) "★" else "☆", if (fav) "Favorited" else "Favorite") { Store.fav(item) }
+                    if (!isSeries && hist != null && hist.pos > 5000) RoundBtn("↺", "Restart") { History.remove(movie.key); play(PlayArgs(vod = listOf(movie))) }
+                }
+                if (m == null) Text("Loading details...", fontSize = 12.sp, color = Theme.muted)
+                else {
                     CrewLine(if (isSeries) "Creator:" else "Director:", m.director)
                     CrewLine("Writer:", m.writer)
+                    CrewLine("Cast:", m.cast.split(",").map { it.trim() }.filter { it.isNotBlank() }.take(10).joinToString(", "), 3)
                     CrewLine("Awards:", m.awards)
-                    Text(m.overview, fontSize = 13.sp, maxLines = if (more) Int.MAX_VALUE else 3, overflow = TextOverflow.Ellipsis)
-                    if (m.overview.length > 170) {
-                        Focusable(Modifier, RoundedCornerShape(6.dp), { more = !more }) { foc ->
-                            Text(if (more) "Show Less ▴" else "Show More ▾", Modifier.padding(horizontal = 6.dp, vertical = 3.dp), fontSize = 12.sp, color = if (foc) Theme.accent else Theme.muted)
-                        }
-                    }
-                }
-            }
-        }
-
-        // ---- series: seasons and episodes
-        if (isSeries) {
-            item {
-                Column(Modifier.padding(horizontal = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Spacer(Modifier.height(10.dp))
-                    if (!loaded) Text("Loading...", fontSize = 12.sp)
-                    else if (eps.isEmpty()) {
-                        Text("Could not load episodes: $epErr", fontSize = 12.sp, color = Color(0xFFFF6B6B))
-                        Chip("Retry", true) { retry++ }
-                    } else LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(eps.map { it.season }.distinct()) { s -> Chip("Season $s", s == season) { season = s } }
-                    }
-                }
-            }
-            if (loaded && eps.isNotEmpty()) {
-                items(eps.filter { it.season == season }, key = { it.id }) { e ->
-                    Box(Modifier.padding(horizontal = 24.dp, vertical = 3.dp)) {
-                        EpisodeRow(e, epInfo[e.num], "e${e.id}" in watched) {
-                            val idx = queue.indexOfFirst { it.key == "e${e.id}" }
-                            if (idx >= 0) {
-                                Store.put(lastKey, e.id)
-                                play(PlayArgs(vod = queue, idx = idx))
+                    if (m.overview.isNotBlank()) {
+                        Text(m.overview, fontSize = 12.sp, maxLines = if (more) Int.MAX_VALUE else 4, overflow = TextOverflow.Ellipsis)
+                        if (m.overview.length > 200) {
+                            Focusable(Modifier, RoundedCornerShape(6.dp), { more = !more }) { foc ->
+                                Text(if (more) "Show Less ▴" else "Show More ▾", Modifier.padding(horizontal = 6.dp, vertical = 3.dp), fontSize = 12.sp, color = if (foc) Theme.accent else Theme.muted)
                             }
                         }
                     }
                 }
             }
-        }
 
-        // ---- cast
-        if (m != null && m.people.isNotEmpty()) {
-            item {
-                Column {
-                    SectionTitle("Cast")
-                    LazyRow(contentPadding = PaddingValues(horizontal = 18.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(m.people) { p -> CastCard(p) }
+            // ---------------- RIGHT: episodes (series) or details + similar (movies)
+            Box(Modifier.weight(0.54f).fillMaxHeight()) {
+                if (isSeries) {
+                    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 40.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        item {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                if (!loaded) Text("Loading...", fontSize = 12.sp)
+                                else if (eps.isEmpty()) {
+                                    Text("Could not load episodes: $epErr", fontSize = 12.sp, color = Color(0xFFFF6B6B))
+                                    Chip("Retry", true) { retry++ }
+                                } else LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    items(eps.map { it.season }.distinct()) { s -> Chip("Season $s", s == season) { season = s } }
+                                }
+                            }
+                        }
+                        if (loaded && eps.isNotEmpty()) {
+                            items(eps.filter { it.season == season }, key = { it.id }) { e ->
+                                EpisodeRow(e, epInfo[e.num], "e${e.id}" in watched) {
+                                    val idx = queue.indexOfFirst { it.key == "e${e.id}" }
+                                    if (idx >= 0) {
+                                        Store.put(lastKey, e.id)
+                                        play(PlayArgs(vod = queue, idx = idx))
+                                    }
+                                }
+                            }
+                        }
+                        if (m != null) item { DetailsTable(m, true) }
+                        if (similar.isNotEmpty()) item { SimilarRow(similar, open) }
+                    }
+                } else {
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 40.dp)) {
+                        if (m != null) DetailsTable(m, false)
+                        if (similar.isNotEmpty()) SimilarRow(similar, open)
                     }
                 }
             }
         }
+    }
+}
 
-        // ---- similar titles that exist in the library
-        if (similar.isNotEmpty()) {
-            item {
-                Column {
-                    SectionTitle("Similar")
-                    LazyRow(contentPadding = PaddingValues(horizontal = 24.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(similar, key = { it.id }) { s -> SimilarCard(s) { open(s) } }
-                    }
-                }
-            }
+@Composable
+private fun DetailsTable(m: Meta, isSeries: Boolean) {
+    Column {
+        SectionTitle(if (isSeries) "Series Details" else "Movie Details", 0.dp)
+        Column(Modifier.widthIn(max = 520.dp)) {
+            DetailRow("Status", m.status)
+            DetailRow("Release Info", if (m.release.isNotBlank()) prettyDate(m.release) else m.year)
+            DetailRow("Runtime", m.runtime)
+            DetailRow("Certification", m.cert)
+            DetailRow("Origin Country", m.country)
         }
+    }
+}
 
-        // ---- details table
-        if (m != null) {
-            item {
-                Column {
-                    SectionTitle(if (isSeries) "Series Details" else "Movie Details")
-                    Column(Modifier.padding(horizontal = 24.dp).widthIn(max = 680.dp)) {
-                        DetailRow("Status", m.status)
-                        DetailRow("Release Info", if (m.release.isNotBlank()) prettyDate(m.release) else m.year)
-                        DetailRow("Runtime", m.runtime)
-                        DetailRow("Certification", m.cert)
-                        DetailRow("Origin Country", m.country)
-                    }
-                }
-            }
+@Composable
+private fun SimilarRow(similar: List<Item>, open: (Item) -> Unit) {
+    Column {
+        SectionTitle("Similar", 0.dp)
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(vertical = 4.dp)) {
+            items(similar, key = { it.id }) { s -> SimilarCard(s) { open(s) } }
         }
     }
 }

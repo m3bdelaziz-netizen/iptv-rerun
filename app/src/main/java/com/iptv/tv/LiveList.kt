@@ -37,7 +37,7 @@ fun applyLiveSort(cat: String, base: List<Item>): List<Item> = when (sortLiveMod
 /** Channels of a live list exactly as they are shown on screen (with the chosen sort / manual order applied). */
 fun liveChannels(cat: String): List<Item> {
     val base: List<Item> = when (cat) {
-        "fav" -> (Repo.live + Repo.radio).filter { Store.favs.contains(it.fkey) }
+        "fav" -> { val fs = HashSet<String>(Store.favs); (Repo.live + Repo.radio).filter { it.fkey in fs } }
         "radio" -> Repo.radio
         "*" -> Repo.live
         else -> Repo.live.filter { it.cat == cat }

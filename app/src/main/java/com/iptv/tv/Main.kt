@@ -68,23 +68,59 @@ fun liveStart(ui: MainUi): LiveStart {
 }
 
 
+private val Q_4K = Regex("\\b(4K|2160P|UHD)\\b")
+private val Q_FHD = Regex("\\b(FHD|1080P|1080I)\\b")
+private val Q_HD = Regex("\\b(HD|720P)\\b")
+private val Q_SD = Regex("\\b(SD|480P|576P)\\b")
+
 fun streamQuality(name: String): String? {
     val u = name.uppercase()
     return when {
-        Regex("\\b(4K|2160P|UHD)\\b").containsMatchIn(u) -> "4K"
-        Regex("\\b(FHD|1080P|1080I)\\b").containsMatchIn(u) -> "FHD"
-        Regex("\\b(HD|720P)\\b").containsMatchIn(u) -> "HD"
-        Regex("\\b(SD|480P|576P)\\b").containsMatchIn(u) -> "SD"
+        Q_4K.containsMatchIn(u) -> "4K"
+        Q_FHD.containsMatchIn(u) -> "FHD"
+        Q_HD.containsMatchIn(u) -> "HD"
+        Q_SD.containsMatchIn(u) -> "SD"
         else -> null
+    }
+}
+
+/**
+ * Sorted copies of the big movie / series lists, built once and reused (sorting 50k+ items on every category switch froze the UI).
+ * A cached copy is valid while the source list is the same object and the sort mode is unchanged.
+ */
+object SortCache {
+    private class E(val src: List<Item>, val sort: Int, val out: List<Item>)
+    private val m = HashMap<String, E>()
+
+    @Synchronized
+    fun get(tag: String, src: List<Item>, sort: Int): List<Item> {
+        if (sort !in 1..3 || src.size < 2) return src
+        val e = m[tag]
+        if (e != null && e.src === src && e.sort == sort) return e.out
+        val out: List<Item> = when (sort) {
+            1 -> src.sortedByDescending { it.added }
+            2 -> src.sortedBy { it.nn }
+            else -> src.map { it to (it.rating.toDoubleOrNull() ?: 0.0) }.sortedByDescending { it.second }.map { it.first }
+        }
+        m[tag] = E(src, sort, out)
+        return out
+    }
+
+    /** Called from the background right after the library is parsed, so the first open of a sorted list is instant. */
+    fun warm() {
+        val sort = Store.int("sortVod", Store.int("sort", 0))
+        if (sort !in 1..3) return
+        runCatching { get("m", Repo.movies, sort); get("s", Repo.series, sort) }
     }
 }
 
 class Cell(val item: Item?, val hist: Hist? = null)
 private class Entry(val id: String, val label: String)
 
-private fun subOf(i: Item): String {
-    val r = if (Store.bool("rating", true) && i.rating.isNotBlank() && i.rating != "0") "★ ${i.rating}" else ""
-    return listOf(i.year, r).filter { it.isNotBlank() }.joinToString("  ")
+private fun subOf(i: Item, showRating: Boolean): String {
+    val r = if (showRating && i.rating.isNotBlank() && i.rating != "0") "★ ${i.rating}" else ""
+    val y = i.year
+    return if (y.isEmpty()) r else if (r.isEmpty()) y else "$y  $r"
 }
 
 @Composable
@@ -115,6 +151,7 @@ fun MainScreen(
     val fv = Store.favs.size
     val sort = remember { Store.int("sortVod", Store.int("sort", 0)) }
     val showLabel = remember { !Store.bool("hideLabels", false) }
+    val showRating = remember { Store.bool("rating", true) }
     val cardMin = remember { when (Store.int("grid", 1)) { 0 -> 100; 2 -> 140; else -> 120 } }
 
     val entries = remember(tab, ver) {
@@ -126,19 +163,16 @@ fun MainScreen(
     val selIdx = entries.indexOfFirst { it.id == cat }.coerceAtLeast(0)
 
     val cells = remember(tab, cat, ver, hv, fv, sort) {
-        fun sorted(l: List<Item>): List<Item> = when (sort) {
-            1 -> l.sortedByDescending { it.added }
-            2 -> l.sortedBy { it.nn }
-            3 -> l.sortedByDescending { it.rating.toDoubleOrNull() ?: 0.0 }
-            else -> l
-        }
         val base = if (tab == 1) Repo.series else Repo.movies
         when (cat) {
             "cw" -> History.all().filter { it.kind == (if (tab == 0) "movie" else "series") }
                 .distinctBy { if (it.sid.isNotBlank()) it.sid else it.key }.map { Cell(null, it) }
-            "fav" -> sorted(base.filter { Store.favs.contains(it.fkey) }).map { Cell(it) }
-            "*" -> sorted(base).map { Cell(it) }
-            else -> sorted(base.filter { it.cat == cat }).map { Cell(it) }
+            "fav" -> {
+                val fs = HashSet<String>(Store.favs)   // one hash lookup per item instead of scanning the favourites list
+                SortCache.get(if (tab == 1) "s" else "m", base, sort).filter { it.fkey in fs }.map { Cell(it) }
+            }
+            "*" -> SortCache.get(if (tab == 1) "s" else "m", base, sort).map { Cell(it) }
+            else -> SortCache.get(if (tab == 1) "s" else "m", base, sort).filter { it.cat == cat }.map { Cell(it) }
         }
     }
     val chans = remember(cells) { cells.mapNotNull { it.item } }
@@ -309,8 +343,8 @@ fun MainScreen(
                                 PosterCard(h.title, if (h.dur > 0L) "${fmtTime(h.pos)} / ${fmtTime(h.dur)}" else "Next episode", h.img, false, h.progress, showLabel, "", mod, { onResume(h) }, { menu = cwMenu(h) })
                             } else if (m != null) {
                                 val fav = Store.favs.contains(m.fkey)
-                                val rTag = if (Store.bool("rating", true) && m.rating.isNotBlank() && m.rating != "0") "★ ${m.rating}" else ""
-                                PosterCard(m.name, subOf(m), m.img, fav, 0f, showLabel, rTag, mod, { onOpen(m) }, { menu = itemMenu(m, i) })
+                                val rTag = if (showRating && m.rating.isNotBlank() && m.rating != "0") "★ ${m.rating}" else ""
+                                PosterCard(m.name, subOf(m, showRating), m.img, fav, 0f, showLabel, rTag, mod, { onOpen(m) }, { menu = itemMenu(m, i) })
                             }
                         }
                     }
@@ -359,7 +393,7 @@ fun PosterCard(
 
 @Composable
 fun LiveCard(num: Int, name: String, img: String, fav: Boolean, mod: Modifier, onClick: () -> Unit, onLong: () -> Unit) {
-    val q = remember(name) { streamQuality(name) }
+    val q = remember(name) { streamQuality(name) }  // cached regexes: cheap
     Card(onClick = onClick, onLongClick = onLong, modifier = mod.fillMaxWidth(), colors = cardColors()) {
         Row(Modifier.padding(8.dp).height(40.dp), verticalAlignment = Alignment.CenterVertically) {
             if (num > 0) Text("$num", Modifier.width(30.dp), fontSize = 11.sp, maxLines = 1)

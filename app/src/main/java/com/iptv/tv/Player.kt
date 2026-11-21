@@ -181,7 +181,7 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
     val cur: Item? = if (isLive) activeChans.getOrNull(ci) else null
     val media: Media? = if (!isLive) args.vod.getOrNull(ci) else null
     val title = cur?.name ?: media?.title ?: ""
-    val badgeQ: String? = StreamInfo.qualityOfHeight(vh) ?: cur?.name?.let { streamQuality(it) }
+    val badgeQ: String? = StreamInfo.qualityOfHeight(vh) ?: cur?.quality
     val seekStep = remember { if (Store.int("seek", 0) == 0) 10_000L else 30_000L }
     val subMult = remember { when (Store.int("ssize", 1)) { 0 -> 0.8f; 2 -> 1.3f; 3 -> 1.6f; else -> 1f } }
     val showClock = remember { Store.bool("clock", true) }
@@ -381,9 +381,9 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
     }
     LaunchedEffect(bar, menu) {
         while (bar || menu) {
-            pos = player.currentPosition
+            pos = player.currentPosition / 1000 * 1000      // whole seconds: state only changes once a second
             dur = player.duration.let { if (it == C.TIME_UNSET || it < 0) 0L else it }
-            clock = System.currentTimeMillis()
+            clock = System.currentTimeMillis() / 60000 * 60000   // the clock only shows HH:mm
             delay(500)
         }
     }
@@ -554,7 +554,8 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
         val categories = remember(Repo.version, Store.favs.size) {
             val counts = Repo.live.groupingBy { it.cat }.eachCount()
             buildList {
-                add(Triple("fav", "Favorites", (Repo.live + Repo.radio).count { Store.favs.contains(it.fkey) }))
+                val fs = HashSet<String>(Store.favs)
+                add(Triple("fav", "Favorites", (Repo.live + Repo.radio).count { it.fkey in fs }))
                 add(Triple("*", "All channels", Repo.live.size))
                 Repo.liveCats.forEach { c -> add(Triple(c.id, c.name, counts[c.id] ?: 0)) }
                 if (Repo.radio.isNotEmpty()) add(Triple("radio", "Radio", Repo.radio.size))
@@ -693,8 +694,8 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
                                     fontWeight = if (playingThis || grabbed) FontWeight.Bold else FontWeight.Normal,
                                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 run {
-                                    val rq = if (playingThis) badgeQ else streamQuality(ch.name)
-                                    val rf = if (playingThis) vfps else FpsMemory.get(ch.fkey).takeIf { it > 0 } ?: StreamInfo.nameFps(ch.name)
+                                    val rq = if (playingThis) badgeQ else ch.quality
+                                    val rf = if (playingThis) vfps else FpsMemory.get(ch.fkey).takeIf { it > 0 } ?: ch.nameFps
                                     if (rq != null || rf > 0) { Spacer(Modifier.width(6.dp)); StreamBadge(rq, rf) }
                                 }
                                 Spacer(Modifier.width(8.dp))
@@ -774,13 +775,17 @@ fun PlayerScreen(args: PlayArgs, onExit: () -> Unit, onSearch: (() -> Unit)? = n
             if (view.player !== player) {
                 view.player = player
             }
-            view.resizeMode = when (fit) {
-                1 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
-                2 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+            val cfg = fit * 1000 + (subMult * 100).toInt()
+            if (view.tag != cfg) {   // this block runs on every recomposition: only touch the view when fit / subtitle size changed
+                view.tag = cfg
+                view.resizeMode = when (fit) {
+                    1 -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+                    2 -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+                    else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+                }
+                view.subtitleView?.setFractionalTextSize(0.0533f * subMult)
+                view.requestLayout()
             }
-            view.subtitleView?.setFractionalTextSize(0.0533f * subMult)
-            view.requestLayout()
         },
         modifier = surfaceModifier
     )

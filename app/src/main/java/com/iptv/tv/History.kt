@@ -19,10 +19,11 @@ object History {
     var version by mutableStateOf(0)
     private var pid = ""
     private var list = mutableListOf<Hist>()
+    private var sorted: List<Hist>? = null   // newest first; rebuilt only after an edit (all() is called from composition)
 
     private fun ensure() {
         val p = Store.pid()
-        if (p != pid) { pid = p; list = read(p) }
+        if (p != pid) { pid = p; list = read(p); sorted = null }
     }
 
     private fun read(p: String): MutableList<Hist> {
@@ -44,11 +45,12 @@ object History {
                 .put("kd", it.kind).put("p", it.pos).put("d", it.dur).put("ts", it.ts).put("s", it.sid))
         }
         Store.sp.edit().putString("hist_$pid", a.toString()).apply()
+        sorted = null
         version++
     }
 
-    fun reload() { pid = ""; version++ }
-    fun all(): List<Hist> { ensure(); return list.sortedByDescending { it.ts } }
+    fun reload() { pid = ""; sorted = null; version++ }
+    fun all(): List<Hist> { ensure(); return sorted ?: list.sortedByDescending { it.ts }.also { sorted = it } }
     fun get(key: String): Hist? { ensure(); return list.firstOrNull { it.key == key } }
 
     fun put(h: Hist) {

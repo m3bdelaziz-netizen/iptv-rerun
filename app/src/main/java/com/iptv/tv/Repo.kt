@@ -85,6 +85,7 @@ object Repo {
         serCats = if (selS == null) allSerCats else allSerCats.filter { it.id in selS }
         val sr = runCatching { Api.parseItems(raw["get_series"] ?: "[]", "series", "series_id", "cover") }.getOrDefault(emptyList())
         series = if (selS == null) sr else sr.filter { it.cat in selS }
+        SortCache.warm()   // sort once here (background thread) so the first Movies / Series screen opens instantly
         version++
     }
 

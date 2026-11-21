@@ -45,7 +45,7 @@ private fun Swatch(c: Color, sel: Boolean, f: () -> Unit) {
         onClick = f, modifier = Modifier.width(32.dp).height(30.dp),
         colors = ButtonDefaults.colors(containerColor = c, focusedContainerColor = c),
         contentPadding = PaddingValues(0.dp)
-    ) { Text(if (sel) "✓" else "", fontSize = 12.sp, color = Color.White) }
+    ) { Text(if (sel) "✓" else "", fontSize = 12.sp, color = if (c.luminance() > 0.5f) Color.Black else Color.White) }
 }
 
 @Composable
@@ -137,12 +137,16 @@ fun SettingsScreen(goVpn: () -> Unit, goPl: () -> Unit, goPhone: () -> Unit, goC
 
         Group("Appearance")
         Text(tr("Theme") + ": " + tr(Theme.modes[Theme.mode]), Modifier.padding(top = 4.dp), fontSize = 13.sp, color = Color.White)
-        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            Theme.palettes.forEachIndexed { i, pal -> Swatch(Color(pal.chip), i == Theme.mode) { Theme.setMode(i); tick++ } }
+        Theme.palettes.withIndex().chunked(10).forEach { rowItems ->
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                rowItems.forEach { (i, pal) -> Swatch(Color(pal.chip), i == Theme.mode) { Theme.setMode(i); tick++ } }
+            }
         }
         Text(tr("Accent color") + ": " + tr(Theme.accents[Theme.accentIdx].first), Modifier.padding(top = 4.dp), fontSize = 13.sp, color = Color.White)
-        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-            Theme.accents.forEachIndexed { i, a -> Swatch(Color(a.second), i == Theme.accentIdx) { Theme.setAccent(i); tick++ } }
+        Theme.accents.withIndex().chunked(9).forEach { rowItems ->
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                rowItems.forEach { (i, a) -> Swatch(Color(a.second), i == Theme.accentIdx) { Theme.setAccent(i); tick++ } }
+            }
         }
         Opt("Poster size", pick("grid", 1, "Small", "Medium", "Large")) { cyc("grid", 3, 1) }
         Opt("Titles under posters", onoff(!Store.bool("hideLabels", false))) { tog("hideLabels", false) }

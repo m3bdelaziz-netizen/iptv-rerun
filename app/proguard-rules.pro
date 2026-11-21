@@ -1,0 +1,4 @@
+-keep class com.wireguard.** { *; }
+-keep class com.iptv.tv.** { *; }
+-dontwarn org.slf4j.**
+-dontwarn javax.annotation.**

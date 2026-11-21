@@ -29,7 +29,12 @@ object Epg {
     /** Drops the guide held in memory; it is downloaded again when needed. */
     fun clearCache() { data = null }
 
-    private fun norm(s: String) = s.lowercase().replace(Regex("[^\\p{L}\\p{N}]"), "")
+    private val NON_ALNUM = Regex("[^\\p{L}\\p{N}]")
+    private val SPACES = Regex("\\s+")
+    // Parsing runs one thread at a time (under [lock]), so two shared formatters are safe and avoid building one per programme.
+    private val fmtZone = SimpleDateFormat("yyyyMMddHHmmss Z", Locale.US)
+    private val fmtUtc = SimpleDateFormat("yyyyMMddHHmmss", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }
+    private fun norm(s: String) = s.lowercase().replace(NON_ALNUM, "")
 
     private fun open(u: String): java.io.InputStream {
         val cn = URL(u).openConnection() as HttpURLConnection
@@ -42,9 +47,10 @@ object Epg {
 
     private fun parseTime(s: String): Long {
         val t = s.trim(); if (t.length < 14) return 0
-        val f = SimpleDateFormat(if (t.length > 14) "yyyyMMddHHmmss Z" else "yyyyMMddHHmmss", Locale.US)
-        if (t.length <= 14) f.timeZone = TimeZone.getTimeZone("UTC")
-        return runCatching { f.parse(t.replace(Regex("\\s+"), " "))!!.time }.getOrDefault(0)
+        return runCatching {
+            if (t.length > 14) fmtZone.parse(if (t.indexOf("  ") >= 0) t.replace(SPACES, " ") else t)!!.time
+            else fmtUtc.parse(t)!!.time
+        }.getOrDefault(0)
     }
 
     private fun load(list: List<String>): Data {

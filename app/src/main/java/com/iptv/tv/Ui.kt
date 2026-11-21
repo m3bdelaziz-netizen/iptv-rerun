@@ -59,6 +59,15 @@ import kotlinx.coroutines.withContext
 class MainActivity : ComponentActivity() {
     override fun onCreate(b: Bundle?) {
         super.onCreate(b); Store.init(this); Lang.apply(); Theme.load()
+        // One image loader tuned for TV boxes: opaque posters decode as RGB565 (half the memory), a bigger disk cache keeps posters between runs.
+        runCatching {
+            coil.Coil.setImageLoader(coil.ImageLoader.Builder(this)
+                .allowRgb565(true)
+                .crossfade(false)
+                .memoryCache { coil.memory.MemoryCache.Builder(this).maxSizePercent(0.20).build() }
+                .diskCache { coil.disk.DiskCache.Builder().directory(java.io.File(cacheDir, "image_cache")).maxSizeBytes(300L * 1024 * 1024).build() }
+                .build())
+        }
         val prev = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
             runCatching { java.io.File(filesDir, "crash.log").writeText(java.util.Date().toString() + "\n" + android.util.Log.getStackTraceString(e)) }

@@ -16,13 +16,18 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+private val YEAR_RE = Regex("(19|20)\\d{2}")
+
 data class Creds(val server: String, val user: String, val pass: String, val tmdb: String)
 data class Cat(val id: String, val name: String)
 data class Item(val id: String, val name: String, val img: String, val kind: String, val cat: String,
                 val ext: String = "", val added: Long = 0, val rating: String = "", val epgId: String = "", val num: Int = 0) {
     val nn: String by lazy(LazyThreadSafetyMode.NONE) { nz(name) }
-    val year: String by lazy(LazyThreadSafetyMode.NONE) { Regex("(19|20)\\d{2}").find(name)?.value ?: "" }
-    val fkey: String get() = "$kind:$id"
+    val year: String by lazy(LazyThreadSafetyMode.NONE) { YEAR_RE.find(name)?.value ?: "" }
+    /** Quality badge text (4K / FHD / HD / SD) and the fps written in the name: computed once per item, not on every scroll. */
+    val quality: String? by lazy(LazyThreadSafetyMode.NONE) { streamQuality(name) }
+    val nameFps: Int by lazy(LazyThreadSafetyMode.NONE) { StreamInfo.nameFps(name) }
+    val fkey: String = "$kind:$id"
 }
 data class Ep(val id: String, val title: String, val season: Int, val num: Int, val ext: String,
               val img: String = "", val plot: String = "", val dur: String = "")
@@ -34,7 +39,7 @@ data class Meta(val backdrop: String?, val overview: String, val rating: String,
                 val ratingSrc: String = "", val note: String = "",
                 val genres: String = "", val runtime: String = "", val writer: String = "", val status: String = "", val country: String = "",
                 val logo: String = "", val release: String = "", val people: List<Person> = emptyList(), val trailers: List<Trailer> = emptyList(),
-                val rt: String = "", val mc: String = "", val awards: String = "", val recs: List<Rec> = emptyList())
+                val rt: String = "", val mc: String = "", val awards: String = "", val recs: List<Rec> = emptyList(), val imdb: String = "")
 data class Guide(val cert: String, val tags: List<String>)
 
 data class Prog(val start: Long, val stop: Long, val title: String)
@@ -127,7 +132,7 @@ object Api {
     var c = Creds("", "", "", "")
     private val cache: MutableMap<String, Meta> = java.util.Collections.synchronizedMap(HashMap<String, Meta>())
 
-    fun clearMeta() { cache.clear() }
+    fun clearMeta() { cache.clear(); pcache.clear(); tcache.clear(); rawCache.clear(); ocache.clear() }
     fun normUrl(server: String): String { val s = server.trim().trimEnd('/'); return if (s.startsWith("http", true)) s else "http://$s" }
     fun base(): String = normUrl(c.server)
 
@@ -139,7 +144,7 @@ object Api {
     }
     private fun auth(u: String = c.user, p: String = c.pass) = "username=${enc(u)}&password=${enc(p)}"
     /** Xtream "player_api.php" call. [extra] is a raw query tail such as "vod_id=12". */
-    fun act(a: String, extra: String = "") = get("${base()}/player_api.php?${auth()}&action=$a${if (extra.isNotEmpty()) "&$extra" else ""}")
+    fun act(a: String, extra: String = "", rt: Int = 90000) = get("${base()}/player_api.php?${auth()}&action=$a${if (extra.isNotEmpty()) "&$extra" else ""}", rt)
 
     // ------------------------------------------------------------------ login
     /** True when the server accepts the account. Throws with a readable message on network errors / expired accounts. */
@@ -164,34 +169,76 @@ object Api {
     fun epUrl(id: String, ext: String) = "${base()}/series/${p(c.user)}/${p(c.pass)}/$id.${ext.ifBlank { "mp4" }}"
 
     // ------------------------------------------------------------------ library parsing
+    /** Reads any JSON scalar as text (strings, numbers, booleans); null and nested values give "". */
+    private fun android.util.JsonReader.str(): String = when (peek()) {
+        android.util.JsonToken.STRING, android.util.JsonToken.NUMBER -> nextString()
+        android.util.JsonToken.BOOLEAN -> nextBoolean().toString()
+        android.util.JsonToken.NULL -> { nextNull(); "" }
+        else -> { skipValue(); "" }
+    }
+
+    /** Streaming parse (no full JSON tree in memory): much faster and lighter than JSONArray for lists of tens of thousands. */
     fun parseCats(text: String): List<Cat> {
-        val a = JSONArray(text)
-        val out = ArrayList<Cat>(a.length())
-        for (i in 0 until a.length()) {
-            val o = a.optJSONObject(i) ?: continue
-            val id = o.s("category_id")
-            if (id.isNotBlank()) out.add(Cat(id, o.s("category_name")))
+        val out = ArrayList<Cat>()
+        val r = android.util.JsonReader(java.io.StringReader(text))
+        r.isLenient = true
+        r.beginArray()
+        while (r.hasNext()) {
+            if (r.peek() != android.util.JsonToken.BEGIN_OBJECT) { r.skipValue(); continue }
+            var id = ""; var name = ""
+            r.beginObject()
+            while (r.hasNext()) when (r.nextName()) {
+                "category_id" -> id = r.str()
+                "category_name" -> name = r.str()
+                else -> r.skipValue()
+            }
+            r.endObject()
+            if (id.isNotBlank()) out.add(Cat(id, name))
         }
+        r.endArray()
         return out
     }
 
     fun parseItems(text: String, kind: String, idKey: String, imgKey: String): List<Item> {
-        val a = JSONArray(text)
-        val out = ArrayList<Item>(a.length())
-        for (i in 0 until a.length()) {
-            val o = a.optJSONObject(i) ?: continue
-            val id = o.s(idKey)
+        val out = ArrayList<Item>(4096)
+        val r = android.util.JsonReader(java.io.StringReader(text))
+        r.isLenient = true
+        r.beginArray()
+        while (r.hasNext()) {
+            if (r.peek() != android.util.JsonToken.BEGIN_OBJECT) { r.skipValue(); continue }
+            var id = ""; var name = ""; var img = ""; var cat = ""; var ext = ""
+            var added = ""; var lastMod = ""; var rating = ""; var rating5 = ""; var epg = ""; var num = ""
+            r.beginObject()
+            while (r.hasNext()) {
+                val k = r.nextName()
+                when {
+                    k == idKey -> id = r.str()
+                    k == imgKey -> img = r.str()
+                    k == "name" -> name = r.str()
+                    k == "category_id" -> cat = r.str()
+                    k == "container_extension" -> ext = r.str()
+                    k == "added" -> added = r.str()
+                    k == "last_modified" -> lastMod = r.str()
+                    k == "rating" -> rating = r.str()
+                    k == "rating_5based" -> rating5 = r.str()
+                    k == "epg_channel_id" -> epg = r.str()
+                    k == "num" -> num = r.str()
+                    else -> r.skipValue()
+                }
+            }
+            r.endObject()
             if (id.isBlank()) continue
-            val added = o.s("added").ifBlank { o.s("last_modified") }.toLongOrNull() ?: 0L
-            val rating = o.s("rating").ifBlank { o.s("rating_5based") }
-            out.add(Item(id, o.s("name"), o.s(imgKey), kind, o.s("category_id"), o.s("container_extension"),
-                added, rating, o.s("epg_channel_id"), o.optInt("num", 0)))
+            out.add(Item(id, name, img, kind, cat, ext,
+                added.ifBlank { lastMod }.toLongOrNull() ?: 0L,
+                rating.ifBlank { rating5 }, epg, num.toIntOrNull() ?: 0))
         }
+        r.endArray()
+        out.trimToSize()
         return out
     }
 
     fun episodes(seriesId: String): List<Ep> {
-        val j = JSONObject(act("get_series_info", "series_id=$seriesId"))
+        val j = JSONObject(rawInfo(true, seriesId))
         val e = j.opt("episodes")
         val out = mutableListOf<Ep>()
         fun addArr(a: JSONArray, fallbackSeason: Int) {
@@ -274,10 +321,36 @@ object Api {
         } catch (e: Exception) { emptyMap() }
     }
 
-    /** TMDB request with a fallback to the official alternate API host (some networks block the main one). */
+    private fun fget(url: String, ct: Int = 4000, rt: Int = 8000): String {
+        val cn = URL(url).openConnection() as HttpURLConnection
+        cn.connectTimeout = ct; cn.readTimeout = rt
+        cn.setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android TV)")
+        try { return cn.inputStream.bufferedReader().use { it.readText() } } finally { cn.disconnect() }
+    }
+
+    private val tHosts = arrayOf("https://api.themoviedb.org/3", "https://api.tmdb.org/3")
+    @Volatile private var tHost = 0
+    @Volatile private var tDownUntil = 0L
+
+    /** TMDB request: short timeouts, remembers which host works, tries the other one, and backs off for a minute when TMDB is unreachable. */
     private fun tget(path: String): String {
-        return try { get("https://api.themoviedb.org/3$path", 15000) }
-        catch (e: Exception) { get("https://api.tmdb.org/3$path", 15000) }
+        if (System.currentTimeMillis() < tDownUntil) throw java.io.IOException("TMDB unreachable")
+        var err: Exception? = null
+        for (n in 0..1) {
+            val h = (tHost + n) % 2
+            try { val r = fget(tHosts[h] + path); tHost = h; return r } catch (e: Exception) { err = e }
+        }
+        val x = err
+        if (x is java.net.SocketTimeoutException || x is java.net.UnknownHostException || x is java.net.ConnectException) tDownUntil = System.currentTimeMillis() + 60_000
+        throw x ?: java.io.IOException("TMDB failed")
+    }
+
+    /** Runs [block] on its own thread right away; the returned function waits for the result (null on failure). */
+    private fun <T> par(block: () -> T): () -> T? {
+        var res: T? = null
+        val t = Thread { res = runCatching(block).getOrNull() }
+        t.start()
+        return { t.join(); res }
     }
 
     private fun search(q: String, type: String, year: String?): JSONObject? {
@@ -346,139 +419,144 @@ object Api {
         return out.toList()
     }
 
-    /** Details page data. Provider info first, TMDB for rating / age rating / cast / trailers / logo, OMDb (optional key) for the real IMDb score. Never throws. */
-    fun tmdb(name: String, series: Boolean, id: String = ""): Meta {
-        val omdb = Store.str("omdb", "")
-        val ck = "$series:$id:$name:${c.tmdb.isNotBlank()}:${omdb.isNotBlank()}:${Lang.ar}"
-        cache[ck]?.let { return it }
-        var backdrop = ""; var overview = ""; var rating = ""; var src = ""; var year = ""
-        var cast = ""; var director = ""; var cert = ""; var trailer = ""; var note = ""
-        var genres = ""; var runtime = ""; var writer = ""; var status = ""; var country = ""; var logo = ""; var release = ""
-        var people = emptyList<Person>()
-        val trailers = ArrayList<Trailer>()
-        var tmdbId = 0; var rtScore = ""; var mcScore = ""; var awards = ""; var recs = emptyList<Rec>()
+    private val pcache = java.util.Collections.synchronizedMap(HashMap<String, Meta>())
+    private val tcache = java.util.Collections.synchronizedMap(HashMap<String, Meta>())
+    private val rawCache = java.util.Collections.synchronizedMap(HashMap<String, String>())
 
-        if (id.isNotBlank()) runCatching {
-            val j = if (series) JSONObject(act("get_series_info", "series_id=$id")) else JSONObject(act("get_vod_info", "vod_id=$id"))
+    /** Provider info (movie or series), fetched once and shared by the details page and the episode list. */
+    @Synchronized fun rawInfo(series: Boolean, id: String): String {
+        val k = "${base()}:$series:$id"
+        rawCache[k]?.let { return it }
+        val s = if (series) act("get_series_info", "series_id=$id", 25000) else act("get_vod_info", "vod_id=$id", 25000)
+        rawCache[k] = s
+        return s
+    }
+
+    private fun hasArabic(s: String) = s.any { it in '\u0600'..'\u06FF' }
+
+    /** PHASE 1 (fast): everything the IPTV provider already knows: plot, genres, duration, cast, director, year, rating, backdrop. Never throws. */
+    fun providerMeta(series: Boolean, id: String): Meta {
+        val ck = "${base()}:$series:$id"
+        pcache[ck]?.let { return it }
+        if (id.isBlank()) return Meta(null, "", "", "")
+        return try {
+            val j = JSONObject(rawInfo(series, id))
             val info = j.optJSONObject("info") ?: JSONObject()
-            overview = info.s("plot").ifEmpty { info.s("description") }
-            rating = info.s("rating").ifEmpty { info.s("kinopoisk_rating") }.takeIf { positive(it) } ?: ""
-            release = info.s("releasedate").ifEmpty { info.s("releaseDate") }
-            year = release.ifEmpty { info.s("year") }.take(4)
-            backdrop = info.optJSONArray("backdrop_path")?.optString(0) ?: ""
-            cast = info.s("cast"); director = info.s("director"); trailer = info.s("youtube_trailer")
-            cert = info.s("age").ifEmpty { info.s("mpaa") }
-            genres = info.s("genre").split(",", "/").map { it.trim() }.filter { it.isNotBlank() }.joinToString(" • ")
-            country = info.s("country")
+            val overview = info.s("plot").ifEmpty { info.s("description") }
+            val rating = info.s("rating").ifEmpty { info.s("kinopoisk_rating") }.takeIf { positive(it) } ?: ""
+            val release = info.s("releasedate").ifEmpty { info.s("releaseDate") }
+            val year = release.ifEmpty { info.s("year") }.take(4)
             val secs = info.optInt("duration_secs", 0)
-            runtime = fmtRun(if (secs > 0) secs / 60 else durMin(info.s("duration")).takeIf { it > 0 } ?: info.s("episode_run_time").toIntOrNull() ?: 0)
-        }
+            val rtm = if (secs > 0) secs / 60 else durMin(info.s("duration")).takeIf { it > 0 } ?: info.s("episode_run_time").toIntOrNull() ?: 0
+            val m = Meta(
+                backdrop = (info.optJSONArray("backdrop_path")?.optString(0) ?: "").ifBlank { null },
+                overview = overview, rating = rating, year = year,
+                cast = info.s("cast"), director = info.s("director"), trailer = info.s("youtube_trailer"),
+                cert = info.s("age").ifEmpty { info.s("mpaa") },
+                genres = info.s("genre").split(",", "/").map { it.trim() }.filter { it.isNotBlank() }.joinToString(" • "),
+                runtime = fmtRun(rtm), country = info.s("country"), release = release)
+            pcache[ck] = m
+            m
+        } catch (e: Exception) { Meta(null, "", "", "") }
+    }
 
-        if (c.tmdb.isBlank()) {
-            note = "Add your TMDB key in Settings to see rating and age rating"
-        } else try {
-            val hit = tmdbFind(name, series)
-            if (hit == null) note = "Not found on TMDB"
-            else {
-                val tid = hit.getInt("id")
-                tmdbId = tid
-                val type = if (series) "tv" else "movie"
-                if (overview.isBlank()) overview = hit.s("overview")
-                if (year.isBlank()) year = hit.s("release_date").ifEmpty { hit.s("first_air_date") }.take(4)
-                if (backdrop.isBlank()) hit.s("backdrop_path").takeIf { it.isNotBlank() }?.let { backdrop = IMG + it }
-                val vote = hit.optDouble("vote_average", 0.0)
-                if (vote > 0.0) { rating = fmt1(vote); src = "TMDB" }
-                val extra = if (series) "credits,content_ratings,external_ids,images" else "credits,release_dates,external_ids,images"
-                val lg = if (Lang.ar) "&language=ar-SA" else ""
-                val d = JSONObject(tget("/$type/$tid?api_key=${c.tmdb}&append_to_response=$extra&include_image_language=en,null$lg"))
-                if (Lang.ar) d.s("overview").takeIf { it.isNotBlank() }?.let { overview = it }
-
-                // cast with photos
-                val ca = d.optJSONObject("credits")?.optJSONArray("cast")
-                if (ca != null && ca.length() > 0) {
-                    val l = ArrayList<Person>()
-                    for (i in 0 until minOf(15, ca.length())) {
-                        val o = ca.getJSONObject(i)
-                        val n = o.s("name"); if (n.isBlank()) continue
-                        l.add(Person(n, o.s("character"), o.s("profile_path").takeIf { it.isNotBlank() }?.let { IMG_S + it } ?: ""))
+    /** PHASE 2: TMDB fills only what the provider lacks (logo, age rating, writer, status, country, IMDb id, suggestions). Never throws. */
+    fun tmdbExtra(base: Meta, name: String, series: Boolean, id: String): Meta {
+        if (c.tmdb.isBlank()) return base
+        val ck = "${normUrl(c.server)}:$series:$id:$name:${Lang.ar}:${c.tmdb.takeLast(4)}"
+        tcache[ck]?.let { return it }
+        return try {
+            val hit = tmdbFind(name, series) ?: return base
+            val tid = hit.getInt("id")
+            val type = if (series) "tv" else "movie"
+            val extra = if (series) "credits,content_ratings,external_ids,images" else "credits,release_dates,external_ids,images"
+            val lg = if (Lang.ar) "&language=ar-SA" else ""
+            val recsJob = par {
+                val l = ArrayList<Rec>()
+                for (kind in listOf("recommendations", "similar")) {
+                    val ra = runCatching { JSONObject(tget("/$type/$tid/$kind?api_key=${c.tmdb}")).optJSONArray("results") }.getOrNull() ?: continue
+                    for (i in 0 until minOf(20, ra.length())) {
+                        val o = ra.optJSONObject(i) ?: continue
+                        val t = o.s("title").ifBlank { o.s("name") }
+                        if (t.isNotBlank()) l.add(Rec(t, o.s("original_title").ifBlank { o.s("original_name") }))
                     }
-                    people = l
-                    if (cast.isBlank()) cast = l.take(5).joinToString(", ") { it.name }
                 }
-                // director / creator and writers
-                val crew = d.optJSONObject("credits")?.optJSONArray("crew")
-                if (director.isBlank()) {
-                    director = if (series) names(d.optJSONArray("created_by")).joinToString(", ")
-                    else crew?.let { cr -> (0 until cr.length()).mapNotNull { cr.optJSONObject(it) }.filter { it.s("job") == "Director" }.map { it.s("name") }.distinct().take(2).joinToString(", ") } ?: ""
-                }
-                if (crew != null) writer = (0 until crew.length()).mapNotNull { crew.optJSONObject(it) }
-                    .filter { it.s("job") in setOf("Writer", "Screenplay", "Story", "Author", "Teleplay") }
-                    .map { it.s("name") }.filter { it.isNotBlank() }.distinct().take(3).joinToString(", ")
+                l.toList()
+            }
+            val d = JSONObject(tget("/$type/$tid?api_key=${c.tmdb}&append_to_response=$extra&include_image_language=en,null$lg"))
 
-                // genres, runtime, status, country, release date
-                names(d.optJSONArray("genres"), "name", 3).takeIf { it.isNotEmpty() }?.let { genres = it.joinToString(" • ") }
-                val rt = if (series) d.optJSONArray("episode_run_time")?.optInt(0, 0) ?: 0 else d.optInt("runtime", 0)
-                if (rt > 0) runtime = fmtRun(rt)
-                status = d.s("status")
-                val pc = names(d.optJSONArray("production_countries"), "name", 4)
-                country = if (pc.isNotEmpty()) pc.joinToString(", ") else {
+            var overview = base.overview.ifBlank { hit.s("overview") }
+            if (Lang.ar) d.s("overview").takeIf { it.isNotBlank() && !hasArabic(base.overview) }?.let { overview = it }
+            var rating = base.rating; var src = base.ratingSrc
+            if (rating.isBlank()) { val v = hit.optDouble("vote_average", 0.0); if (v > 0.0) { rating = fmt1(v); src = "TMDB" } }
+            val year = base.year.ifBlank { hit.s("release_date").ifEmpty { hit.s("first_air_date") }.take(4) }
+            val backdrop = base.backdrop ?: hit.s("backdrop_path").takeIf { it.isNotBlank() }?.let { IMG + it }
+
+            val crew = d.optJSONObject("credits")?.optJSONArray("crew")
+            var director = base.director
+            if (director.isBlank()) director = if (series) names(d.optJSONArray("created_by")).joinToString(", ")
+                else crew?.let { cr -> (0 until cr.length()).mapNotNull { cr.optJSONObject(it) }.filter { it.s("job") == "Director" }.map { it.s("name") }.distinct().take(2).joinToString(", ") } ?: ""
+            val writer = if (crew == null) "" else (0 until crew.length()).mapNotNull { crew.optJSONObject(it) }
+                .filter { it.s("job") in setOf("Writer", "Screenplay", "Story", "Author", "Teleplay") }
+                .map { it.s("name") }.filter { it.isNotBlank() }.distinct().take(3).joinToString(", ")
+            var cast = base.cast
+            if (cast.isBlank()) cast = names(d.optJSONObject("credits")?.optJSONArray("cast"), "name", 8).joinToString(", ")
+
+            val genres = base.genres.ifBlank { names(d.optJSONArray("genres"), "name", 3).joinToString(" • ") }
+            val rtm = if (series) d.optJSONArray("episode_run_time")?.optInt(0, 0) ?: 0 else d.optInt("runtime", 0)
+            val runtime = base.runtime.ifBlank { fmtRun(rtm) }
+            val pc = names(d.optJSONArray("production_countries"), "name", 4)
+            val country = base.country.ifBlank {
+                if (pc.isNotEmpty()) pc.joinToString(", ") else {
                     val oc = d.optJSONArray("origin_country")
-                    if (oc != null) (0 until oc.length()).joinToString(", ") { java.util.Locale("", oc.optString(it)).getDisplayCountry(java.util.Locale.ENGLISH) } else country
-                }
-                d.s("release_date").ifEmpty { d.s("first_air_date") }.takeIf { it.isNotBlank() }?.let { release = it }
-
-                // logo (title image)
-                d.optJSONObject("images")?.optJSONArray("logos")?.let { lg ->
-                    val all = (0 until lg.length()).mapNotNull { lg.optJSONObject(it) }
-                    val best = all.firstOrNull { it.s("iso_639_1") == "en" } ?: all.firstOrNull { it.isNull("iso_639_1") || it.s("iso_639_1").isBlank() } ?: all.firstOrNull()
-                    best?.s("file_path")?.takeIf { it.isNotBlank() }?.let { logo = IMG_L + it }
-                }
-                // suggestions (English titles, so they can be matched against the library)
-                runCatching {
-                    val l = ArrayList<Rec>()
-                    for (kind in listOf("recommendations", "similar")) {
-                        val ra = runCatching { JSONObject(tget("/$type/$tid/$kind?api_key=${c.tmdb}")).optJSONArray("results") }.getOrNull() ?: continue
-                        for (i in 0 until minOf(20, ra.length())) {
-                            val o = ra.optJSONObject(i) ?: continue
-                            val t = o.s("title").ifBlank { o.s("name") }
-                            if (t.isNotBlank()) l.add(Rec(t, o.s("original_title").ifBlank { o.s("original_name") }))
-                        }
-                    }
-                    recs = l
-                }
-                val c2 = certOf(d, series)
-                if (c2.isNotBlank()) cert = c2
-                if (omdb.isNotBlank()) {
-                    val imdb = d.optJSONObject("external_ids")?.s("imdb_id").orEmpty().ifBlank { d.s("imdb_id") }
-                    if (imdb.isNotBlank()) {
-                        val o = JSONObject(get("https://www.omdbapi.com/?apikey=$omdb&i=$imdb", 15000))
-                        val r = o.s("imdbRating")
-                        if (positive(r)) { rating = r; src = "IMDb" } else note = "No IMDb score for this title"
-                        o.optJSONArray("Ratings")?.let { ra ->
-                            for (i in 0 until ra.length()) {
-                                val x = ra.optJSONObject(i) ?: continue
-                                when (x.s("Source")) {
-                                    "Rotten Tomatoes" -> rtScore = x.s("Value")
-                                    "Metacritic" -> mcScore = x.s("Value").substringBefore("/")
-                                }
-                            }
-                        }
-                        awards = o.s("Awards").takeIf { it.isNotBlank() && it != "N/A" } ?: ""
-                    }
+                    if (oc != null) (0 until oc.length()).joinToString(", ") { java.util.Locale("", oc.optString(it)).getDisplayCountry(java.util.Locale.ENGLISH) } else ""
                 }
             }
-        } catch (e: Exception) {
-            note = "TMDB: " + (e.message ?: e.javaClass.simpleName)
-        }
-
-        if (people.isEmpty() && cast.isNotBlank()) people = cast.split(",").map { it.trim() }.filter { it.isNotBlank() }.take(15).map { Person(it, "", "") }
-        if (overview.isBlank()) overview = "No overview available."
-        val m = Meta(backdrop.ifBlank { null }, overview, rating, year, tmdbId, cast, director, cert, trailer, src, note,
-            genres, runtime, writer, status, country, logo, release, people, trailers.toList(),
-            rtScore, mcScore, awards, recs)
-        if (note.isBlank()) cache[ck] = m
-        return m
+            val release = base.release.ifBlank { d.s("release_date").ifEmpty { d.s("first_air_date") } }
+            var logo = ""
+            d.optJSONObject("images")?.optJSONArray("logos")?.let { lg2 ->
+                val all = (0 until lg2.length()).mapNotNull { lg2.optJSONObject(it) }
+                val best = all.firstOrNull { it.s("iso_639_1") == "en" } ?: all.firstOrNull { it.isNull("iso_639_1") || it.s("iso_639_1").isBlank() } ?: all.firstOrNull()
+                best?.s("file_path")?.takeIf { it.isNotBlank() }?.let { logo = IMG_L + it }
+            }
+            val imdb = d.optJSONObject("external_ids")?.s("imdb_id").orEmpty().ifBlank { d.s("imdb_id") }
+            val m = base.copy(backdrop = backdrop, overview = overview, rating = rating, ratingSrc = src, year = year, id = tid,
+                cast = cast, director = director, cert = certOf(d, series).ifBlank { base.cert }, genres = genres, runtime = runtime,
+                writer = writer, status = d.s("status"), country = country, logo = logo, release = release,
+                recs = recsJob() ?: emptyList(), imdb = imdb)
+            tcache[ck] = m
+            m
+        } catch (e: Exception) { base }
     }
+
+    private val ocache = java.util.Collections.synchronizedMap(HashMap<String, Meta>())
+
+    /** PHASE 3 (optional OMDb key): real IMDb score, Rotten Tomatoes, Metacritic, awards. Never throws. */
+    fun omdbExtra(base: Meta): Meta {
+        val key = Store.str("omdb", "")
+        if (key.isBlank() || base.imdb.isBlank()) return base
+        val ck = "${base.imdb}:$key"
+        ocache[ck]?.let { return it }
+        return try {
+            val o = JSONObject(fget("https://www.omdbapi.com/?apikey=$key&i=${base.imdb}"))
+            var rating = base.rating; var src = base.ratingSrc
+            val r = o.s("imdbRating")
+            if (positive(r)) { rating = r; src = "IMDb" }
+            var rtS = ""; var mcS = ""
+            o.optJSONArray("Ratings")?.let { ra ->
+                for (i in 0 until ra.length()) {
+                    val x = ra.optJSONObject(i) ?: continue
+                    when (x.s("Source")) { "Rotten Tomatoes" -> rtS = x.s("Value"); "Metacritic" -> mcS = x.s("Value").substringBefore("/") }
+                }
+            }
+            val m = base.copy(rating = rating, ratingSrc = src, rt = rtS, mc = mcS, awards = o.s("Awards").takeIf { it.isNotBlank() && it != "N/A" } ?: "")
+            ocache[ck] = m
+            m
+        } catch (e: Exception) { base }
+    }
+
+    /** All phases in one blocking call (kept for other screens). */
+    fun tmdb(name: String, series: Boolean, id: String = ""): Meta = omdbExtra(tmdbExtra(providerMeta(series, id), name, series, id))
 
     private val tagWords = listOf(
         "violence" to "Violence", "gore" to "Gore", "blood" to "Blood", "nudity" to "Nudity", "sex" to "Sexual content",
